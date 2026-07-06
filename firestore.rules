@@ -1,0 +1,66 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 1. Global Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_-]+$');
+    }
+
+    // 2. Event Validation Helper
+    function isValidEvent(data) {
+      return data.keys().hasAll(['name', 'createdAt', 'creatorUid'])
+        && data.name is string
+        && data.name.size() > 0
+        && data.name.size() <= 100
+        && data.creatorUid is string
+        && data.creatorUid.size() <= 128;
+    }
+
+    // 3. Admin Key Validation Helper
+    function isValidAdminKey(data) {
+      return data.keys().hasAll(['eventId', 'adminKey', 'createdAt'])
+        && data.eventId is string
+        && data.eventId.size() <= 128
+        && data.adminKey is string
+        && data.adminKey.size() > 0
+        && data.adminKey.size() <= 128;
+    }
+
+    // 4. Attendee Validation Helper
+    function isValidAttendee(data) {
+      return data.keys().hasAll(['name', 'joinedAt', 'gender'])
+        && data.name is string
+        && data.name.size() > 0
+        && data.name.size() <= 100
+        && data.gender is string
+        && data.gender.size() > 0
+        && data.gender.size() <= 50
+        && (!('latitude' in data) || data.latitude is number || data.latitude == null)
+        && (!('longitude' in data) || data.longitude is number || data.longitude == null);
+    }
+
+    // Matches for Events
+    match /events/{eventId} {
+      allow get: if isValidId(eventId);
+      allow create: if isValidId(eventId) && isValidEvent(request.resource.data);
+      allow delete: if isValidId(eventId);
+
+      // Match attendees subcollection
+      match /attendees/{attendeeId} {
+        allow create: if isValidId(eventId) && isValidId(attendeeId) && isValidAttendee(request.resource.data);
+        allow get, list, delete: if isValidId(eventId);
+      }
+    }
+
+    // Matches for admin_keys
+    match /admin_keys/{eventId} {
+      allow create: if isValidId(eventId) && isValidAdminKey(request.resource.data);
+      allow get: if isValidId(eventId);
+    }
+  }
+}

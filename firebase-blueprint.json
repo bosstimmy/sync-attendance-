@@ -1,0 +1,114 @@
+{
+  "entities": {
+    "event": {
+      "title": "Event",
+      "description": "An attendance tracking event/session",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "The name of the event"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp when the event was created"
+        },
+        "creatorUid": {
+          "type": "string",
+          "description": "The UID of the user who created the event"
+        }
+      },
+      "required": ["name", "createdAt", "creatorUid"]
+    },
+    "adminKey": {
+      "title": "Admin Key",
+      "description": "Secure secret mapping for event administration",
+      "type": "object",
+      "properties": {
+        "eventId": {
+          "type": "string",
+          "description": "The associated event ID"
+        },
+        "adminKey": {
+          "type": "string",
+          "description": "Secret key used to authorize administration of the event"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp when this mapping was created"
+        }
+      },
+      "required": ["eventId", "adminKey", "createdAt"]
+    },
+    "eventAdmin": {
+      "title": "Event Admin Registration",
+      "description": "An authorized admin user session for a specific event",
+      "type": "object",
+      "properties": {
+        "adminKey": {
+          "type": "string",
+          "description": "The admin key that was supplied to authorize this user"
+        },
+        "assignedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp when the user became an authorized admin"
+        }
+      },
+      "required": ["adminKey", "assignedAt"]
+    },
+    "attendee": {
+      "title": "Attendee",
+      "description": "An attendee checked into an event",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "The name of the attendee"
+        },
+        "gender": {
+          "type": "string",
+          "description": "The gender of the attendee"
+        },
+        "joinedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp when the attendee checked in"
+        },
+        "latitude": {
+          "type": "number",
+          "description": "Geographical coordinate latitude of attendee at check-in"
+        },
+        "longitude": {
+          "type": "number",
+          "description": "Geographical coordinate longitude of attendee at check-in"
+        },
+        "userAgent": {
+          "type": "string",
+          "description": "Browser details of the attendee"
+        }
+      },
+      "required": ["name", "gender", "joinedAt"]
+    }
+  },
+  "firestore": {
+    "/events/{eventId}": {
+      "schema": "event",
+      "description": "Public metadata of the event"
+    },
+    "/admin_keys/{eventId}": {
+      "schema": "adminKey",
+      "description": "Secure mapping containing the administration key"
+    },
+    "/events/{eventId}/admins/{userId}": {
+      "schema": "eventAdmin",
+      "description": "Users who are registered admins for this event"
+    },
+    "/events/{eventId}/attendees/{attendeeId}": {
+      "schema": "attendee",
+      "description": "Checked-in attendees for the event"
+    }
+  }
+}
