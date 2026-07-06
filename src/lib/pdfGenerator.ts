@@ -1,8 +1,15 @@
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { Attendee } from '../types';
+import { calculateDistanceInMillimeters, formatProximity, getProximityStatus } from './geo';
 
-export function generateAttendancePDF(eventName: string, attendees: Attendee[], eventDate: string) {
+export function generateAttendancePDF(
+  eventName: string, 
+  attendees: Attendee[], 
+  eventDate: string,
+  creatorLatitude?: number | null,
+  creatorLongitude?: number | null
+) {
   const doc = new jsPDF({
     orientation: 'portrait',
     unit: 'mm',
@@ -34,7 +41,7 @@ export function generateAttendancePDF(eventName: string, attendees: Attendee[], 
   doc.setFont('Helvetica', 'bold');
   doc.setFontSize(12);
   doc.setTextColor(darkColor[0], darkColor[1], darkColor[2]);
-  doc.text(eventName, 42, 32);
+  doc.text(eventName, 48, 32);
 
   doc.setFont('Helvetica', 'normal');
   doc.setFontSize(10);
@@ -44,7 +51,7 @@ export function generateAttendancePDF(eventName: string, attendees: Attendee[], 
   doc.setFont('Helvetica', 'bold');
   doc.setFontSize(11);
   doc.setTextColor(darkColor[0], darkColor[1], darkColor[2]);
-  doc.text(new Date(eventDate).toLocaleString(), 42, 39);
+  doc.text(new Date(eventDate).toLocaleString(), 48, 39);
 
   doc.setFont('Helvetica', 'normal');
   doc.setFontSize(10);
@@ -54,7 +61,20 @@ export function generateAttendancePDF(eventName: string, attendees: Attendee[], 
   doc.setFont('Helvetica', 'bold');
   doc.setFontSize(11);
   doc.setTextColor(darkColor[0], darkColor[1], darkColor[2]);
-  doc.text(`${attendees.length} attendee${attendees.length === 1 ? '' : 's'}`, 42, 46);
+  doc.text(`${attendees.length} attendee${attendees.length === 1 ? '' : 's'}`, 48, 46);
+
+  doc.setFont('Helvetica', 'normal');
+  doc.setFontSize(10);
+  doc.setTextColor(grayColor[0], grayColor[1], grayColor[2]);
+  doc.text('Anchor Location:', 14, 53);
+  
+  doc.setFont('Helvetica', 'bold');
+  doc.setFontSize(10);
+  doc.setTextColor(darkColor[0], darkColor[1], darkColor[2]);
+  const anchorStr = creatorLatitude !== null && creatorLatitude !== undefined && creatorLongitude !== null && creatorLongitude !== undefined
+    ? `${creatorLatitude.toFixed(6)}, ${creatorLongitude.toFixed(6)}`
+    : 'No reference coordinates recorded';
+  doc.text(anchorStr, 48, 53);
 
   // 3. Table of Attendees
   const sortedAttendees = [...attendees].sort((a, b) => 
@@ -63,41 +83,56 @@ export function generateAttendancePDF(eventName: string, attendees: Attendee[], 
 
   const tableBody = sortedAttendees.map((att, index) => {
     const joinDate = new Date(att.joinedAt);
+    
     const locString = att.latitude && att.longitude 
       ? `${att.latitude.toFixed(5)}, ${att.longitude.toFixed(5)}` 
-      : 'Not shared';
+      : 'No GPS data';
+
+    const distMm = calculateDistanceInMillimeters(
+      creatorLatitude,
+      creatorLongitude,
+      att.latitude,
+      att.longitude
+    );
+
+    const proximityString = distMm !== null ? formatProximity(distMm) : 'N/A';
+    const status = getProximityStatus(distMm);
+    const judgmentString = distMm !== null ? status.label : 'N/A';
+
     return [
       String(index + 1),
       att.name,
       att.gender || 'Not specified',
       locString,
-      joinDate.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }),
-      joinDate.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+      proximityString,
+      judgmentString,
+      joinDate.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
     ];
   });
 
   autoTable(doc, {
-    startY: 54,
-    head: [['#', 'Name', 'Gender', 'Location', 'Join Date', 'Join Time']],
+    startY: 62,
+    head: [['#', 'Name', 'Gender', 'Location Token', 'Proximity (mm)', 'Status Judgment', 'Checked In']],
     body: tableBody,
     theme: 'striped',
     headStyles: {
       fillColor: primaryColor,
       textColor: [255, 255, 255],
       fontStyle: 'bold',
-      fontSize: 10,
+      fontSize: 8.5,
     },
     bodyStyles: {
-      fontSize: 9.5,
+      fontSize: 8.5,
       textColor: darkColor,
     },
     columnStyles: {
-      0: { cellWidth: 10, halign: 'center' },
-      1: { cellWidth: 50 },
-      2: { cellWidth: 25, halign: 'center' },
-      3: { cellWidth: 35, halign: 'center' },
-      4: { cellWidth: 30, halign: 'center' },
-      5: { cellWidth: 30, halign: 'center' },
+      0: { cellWidth: 8, halign: 'center' },
+      1: { cellWidth: 38 },
+      2: { cellWidth: 20, halign: 'center' },
+      3: { cellWidth: 33, halign: 'center' },
+      4: { cellWidth: 33, halign: 'center' },
+      5: { cellWidth: 25, halign: 'center' },
+      6: { cellWidth: 25, halign: 'center' },
     },
     didDrawPage: (data) => {
       // Footer: Page Numbering

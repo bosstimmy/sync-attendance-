@@ -3,6 +3,7 @@ import { db, getOrCreateUser } from '../lib/firebase';
 import { doc, getDoc, collection, onSnapshot, setDoc, deleteDoc, serverTimestamp, query, orderBy } from 'firebase/firestore';
 import { Attendee, Event } from '../types';
 import { generateAttendancePDF } from '../lib/pdfGenerator';
+import { calculateDistanceInMillimeters, formatProximity, getProximityStatus } from '../lib/geo';
 import { 
   ArrowLeft, Download, Share2, Copy, Check, Search, Trash2, 
   Users, Calendar, Clock, AlertCircle, ShieldAlert, ShieldCheck, ExternalLink, QrCode, MapPin
@@ -94,7 +95,9 @@ export default function Dashboard({ eventId, adminKey: propAdminKey, onNavigateH
           id: eventId,
           name: data.name,
           createdAt: data.createdAt?.toDate ? data.createdAt.toDate().toISOString() : new Date().toISOString(),
-          creatorUid: data.creatorUid
+          creatorUid: data.creatorUid,
+          creatorLatitude: data.creatorLatitude !== undefined ? data.creatorLatitude : null,
+          creatorLongitude: data.creatorLongitude !== undefined ? data.creatorLongitude : null
         });
       }
     }).catch(err => console.error("Error loading event doc", err));
@@ -213,7 +216,13 @@ export default function Dashboard({ eventId, adminKey: propAdminKey, onNavigateH
 
   const triggerPDFDownload = () => {
     if (!event) return;
-    generateAttendancePDF(event.name, attendees, event.createdAt);
+    generateAttendancePDF(
+      event.name, 
+      attendees, 
+      event.createdAt,
+      event.creatorLatitude,
+      event.creatorLongitude
+    );
   };
 
   // Filter attendees by search query
@@ -465,11 +474,19 @@ export default function Dashboard({ eventId, adminKey: propAdminKey, onNavigateH
 
         <div className="bg-white rounded-2xl border border-gray-100 p-5 fancy-shadow flex items-center space-x-4">
           <div className="p-3.5 bg-amber-50 text-amber-600 rounded-xl shrink-0">
-            <ShieldCheck className="w-6 h-6" />
+            <MapPin className="w-6 h-6" />
           </div>
-          <div>
-            <p className="text-xs text-gray-400 font-semibold tracking-wide uppercase">Security Status</p>
-            <p className="text-sm font-bold text-gray-900 mt-0.5">Secure Firestore Auth</p>
+          <div className="min-w-0 flex-1">
+            <p className="text-xs text-gray-400 font-semibold tracking-wide uppercase">Reference Anchor</p>
+            <p className="text-sm font-bold text-gray-900 mt-0.5 truncate">
+              {event?.creatorLatitude !== null && event?.creatorLatitude !== undefined && event?.creatorLongitude !== null && event?.creatorLongitude !== undefined ? (
+                <span className="font-mono text-xs">
+                  {event.creatorLatitude.toFixed(5)}, {event.creatorLongitude.toFixed(5)}
+                </span>
+              ) : (
+                'No anchor token'
+              )}
+            </p>
           </div>
         </div>
       </div>
@@ -540,18 +557,48 @@ export default function Dashboard({ eventId, adminKey: propAdminKey, onNavigateH
                       </td>
                       <td className="py-4 px-6">
                         {att.latitude && att.longitude ? (
-                          <a 
-                            href={`https://www.google.com/maps?q=${att.latitude},${att.longitude}`}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="inline-flex items-center space-x-1 text-indigo-600 hover:text-indigo-800 hover:underline transition-colors font-medium bg-indigo-50/50 px-2 py-1 rounded-lg border border-indigo-100/40 text-xs"
-                            title={`Coords: ${att.latitude.toFixed(5)}, ${att.longitude.toFixed(5)}`}
-                          >
-                            <MapPin className="w-3.5 h-3.5" />
-                            <span>Map Pin</span>
-                          </a>
+                          <div className="flex flex-col space-y-1" id={`att-proximity-${att.id}`}>
+                            {(() => {
+                              const distMm = calculateDistanceInMillimeters(
+                                event?.creatorLatitude,
+                                event?.creatorLongitude,
+                                att.latitude,
+                                att.longitude
+                              );
+                              const status = getProximityStatus(distMm);
+                              return (
+                                <>
+                                  <div className="flex flex-wrap items-center gap-1.5">
+                                    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border ${status.className}`}>
+                                      {status.label}
+                                    </span>
+                                    {distMm !== null && (
+                                      <span className="text-[11px] font-mono font-semibold text-gray-600">
+                                        {formatProximity(distMm)}
+                                      </span>
+                                    )}
+                                  </div>
+                                  <div className="text-[11px] text-gray-400 flex items-center space-x-1.5">
+                                    <span className="font-mono">Token: {att.latitude.toFixed(5)}, {att.longitude.toFixed(5)}</span>
+                                    <span>•</span>
+                                    <a 
+                                      href={`https://www.google.com/maps?q=${att.latitude},${att.longitude}`}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="text-indigo-600 hover:text-indigo-800 hover:underline"
+                                    >
+                                      View Map
+                                    </a>
+                                  </div>
+                                </>
+                              );
+                            })()}
+                          </div>
                         ) : (
-                          <span className="text-gray-400 italic text-xs">Not shared</span>
+                          <span className="text-gray-400 italic text-xs flex items-center space-x-1">
+                            <span>⚠️</span>
+                            <span>No GPS token</span>
+                          </span>
                         )}
                       </td>
                       <td className="py-4 px-6 text-gray-600">

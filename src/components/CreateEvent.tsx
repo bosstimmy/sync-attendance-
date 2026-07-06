@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { db, getOrCreateUser, handleFirestoreError, OperationType } from '../lib/firebase';
 import { doc, setDoc, serverTimestamp } from 'firebase/firestore';
-import { Plus, Calendar, Shield, ExternalLink, Copy, Check, Trash2, ArrowLeft } from 'lucide-react';
+import { Plus, Calendar, Shield, ExternalLink, Copy, Check, Trash2, ArrowLeft, MapPin } from 'lucide-react';
 import { motion } from 'motion/react';
 
 interface LocalEvent {
@@ -52,13 +52,45 @@ export default function CreateEvent({ onNavigate }: CreateEventProps) {
       const eventId = 'ev_' + Math.random().toString(36).substring(2, 11);
       const adminKey = 'adm_' + Math.random().toString(36).substring(2, 15);
 
-      // 3. Create Event Document (Public info)
+      // 3. Attempt to capture high-precision coordinator location token
+      let creatorLatitude: number | null = null;
+      let creatorLongitude: number | null = null;
+
+      try {
+        const coords = await new Promise<{ latitude: number | null; longitude: number | null }>((resolve) => {
+          if (!navigator.geolocation) {
+            resolve({ latitude: null, longitude: null });
+            return;
+          }
+          navigator.geolocation.getCurrentPosition(
+            (position) => {
+              resolve({
+                latitude: position.coords.latitude,
+                longitude: position.coords.longitude
+              });
+            },
+            (error) => {
+              console.warn("Coordinator geolocation acquisition failed", error);
+              resolve({ latitude: null, longitude: null });
+            },
+            { enableHighAccuracy: true, timeout: 5000, maximumAge: 0 }
+          );
+        });
+        creatorLatitude = coords.latitude;
+        creatorLongitude = coords.longitude;
+      } catch (err) {
+        console.error("Coordinator coordinate fetch error:", err);
+      }
+
+      // 4. Create Event Document (Public info)
       const eventRef = doc(db, 'events', eventId);
       try {
         await setDoc(eventRef, {
           name: eventName.trim(),
           createdAt: serverTimestamp(),
-          creatorUid: user.uid
+          creatorUid: user.uid,
+          creatorLatitude,
+          creatorLongitude
         });
       } catch (err: any) {
         handleFirestoreError(err, OperationType.CREATE, `events/${eventId}`);
@@ -167,6 +199,13 @@ export default function CreateEvent({ onNavigate }: CreateEventProps) {
               className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-colors text-gray-900 bg-gray-50/50"
               disabled={loading}
             />
+          </div>
+
+          <div className="flex items-start space-x-2 bg-indigo-50/50 p-3.5 rounded-xl border border-indigo-100/50 text-xs text-indigo-700/95" id="creation-geo-notice">
+            <MapPin className="w-4 h-4 text-indigo-500 shrink-0 mt-0.5" />
+            <span className="leading-relaxed">
+              <strong>Millimeter Proximity Verifier:</strong> Your current location coordinates are securely logged as a reference token. Attendees' check-in coordinates will be compared to calculate their distance in millimeters, helping you judge attendance authenticity.
+            </span>
           </div>
 
           {error && (

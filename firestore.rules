@@ -18,7 +18,9 @@ service cloud.firestore {
         && data.name.size() > 0
         && data.name.size() <= 100
         && data.creatorUid is string
-        && data.creatorUid.size() <= 128;
+        && data.creatorUid.size() <= 128
+        && (!('creatorLatitude' in data) || data.creatorLatitude is number || data.creatorLatitude == null)
+        && (!('creatorLongitude' in data) || data.creatorLongitude is number || data.creatorLongitude == null);
     }
 
     // 3. Admin Key Validation Helper

@@ -3,6 +3,8 @@ export interface Event {
   name: string;
   createdAt: string; // ISO string
   creatorUid: string;
+  creatorLatitude?: number | null;
+  creatorLongitude?: number | null;
 }
 
 export interface Attendee {

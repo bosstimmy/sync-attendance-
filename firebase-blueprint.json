@@ -17,6 +17,14 @@
         "creatorUid": {
           "type": "string",
           "description": "The UID of the user who created the event"
+        },
+        "creatorLatitude": {
+          "type": "number",
+          "description": "Geographical coordinate latitude of the creator at event creation"
+        },
+        "creatorLongitude": {
+          "type": "number",
+          "description": "Geographical coordinate longitude of the creator at event creation"
         }
       },
       "required": ["name", "createdAt", "creatorUid"]
