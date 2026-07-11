@@ -39,13 +39,15 @@ export default function CheckIn({ eventId, onNavigateHome }: CheckInProps) {
     customQuestion: string | null;
     customQuestion2: string | null;
     customQuestion3: string | null;
+    eventType?: string | null;
   }>({
     requireGender: true,
     requireMatricNumber: false,
     requireGeolocation: true,
     customQuestion: null,
     customQuestion2: null,
-    customQuestion3: null
+    customQuestion3: null,
+    eventType: null
   });
 
   // Load event details and check local storage & Firestore for existing check-in
@@ -79,7 +81,8 @@ export default function CheckIn({ eventId, onNavigateHome }: CheckInProps) {
             requireGeolocation: data.requireGeolocation !== undefined ? data.requireGeolocation : true,
             customQuestion: data.customQuestion !== undefined ? data.customQuestion : null,
             customQuestion2: data.customQuestion2 !== undefined ? data.customQuestion2 : null,
-            customQuestion3: data.customQuestion3 !== undefined ? data.customQuestion3 : null
+            customQuestion3: data.customQuestion3 !== undefined ? data.customQuestion3 : null,
+            eventType: data.eventType !== undefined ? data.eventType : null
           };
           setEventConfig(config);
 
@@ -336,7 +339,15 @@ export default function CheckIn({ eventId, onNavigateHome }: CheckInProps) {
                   )}
                   {savedCheckIn.matricNumber && (
                     <p className="text-xs text-gray-500 pl-6 font-medium">
-                      <span className="text-gray-400 font-semibold uppercase text-[10px]">Matric No:</span> {savedCheckIn.matricNumber}
+                      <span className="text-gray-400 font-semibold uppercase text-[10px]">
+                        {eventConfig.eventType === 'school' 
+                          ? 'Student ID:' 
+                          : eventConfig.eventType === 'class' 
+                          ? 'Matric No:' 
+                          : eventConfig.eventType === 'meeting' 
+                          ? 'Employee ID:' 
+                          : 'ID Number:'}
+                      </span> {savedCheckIn.matricNumber}
                     </p>
                   )}
                   {savedCheckIn.customResponse && (
@@ -451,14 +462,26 @@ export default function CheckIn({ eventId, onNavigateHome }: CheckInProps) {
               {eventConfig.requireMatricNumber && (
                 <div>
                   <label htmlFor="attendee-matric-input" className="block text-sm font-medium text-gray-700 mb-1.5">
-                    Class Matriculation Number
+                    {eventConfig.eventType === 'school' 
+                      ? 'Student ID Number' 
+                      : eventConfig.eventType === 'class' 
+                      ? 'Class Matriculation / Student ID' 
+                      : eventConfig.eventType === 'meeting' 
+                      ? 'Employee ID / Participant Code' 
+                      : 'Matriculation / ID Number'}
                   </label>
                   <input
                     type="text"
                     id="attendee-matric-input"
                     value={matricNumber}
                     onChange={(e) => setMatricNumber(e.target.value)}
-                    placeholder="e.g., MAT-2026-8941"
+                    placeholder={eventConfig.eventType === 'school' 
+                      ? 'e.g., SCH-2026-4412' 
+                      : eventConfig.eventType === 'class' 
+                      ? 'e.g., MAT-2026-8941' 
+                      : eventConfig.eventType === 'meeting' 
+                      ? 'e.g., EMP-402' 
+                      : 'e.g., ID-2026-5501'}
                     maxLength={50}
                     className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-colors text-gray-900 bg-gray-50/50"
                     disabled={checkingIn}

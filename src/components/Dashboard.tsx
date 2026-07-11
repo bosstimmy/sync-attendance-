@@ -8,7 +8,7 @@ import { calculateDistanceInMillimeters, formatProximity, getProximityStatus } f
 import { 
   ArrowLeft, Download, Share2, Copy, Check, Search, Trash2, 
   Users, Calendar, Clock, AlertCircle, ShieldAlert, ShieldCheck, ExternalLink, QrCode, MapPin,
-  Mail, LogOut
+  Mail, LogOut, BookOpen, GraduationCap, Briefcase, Sparkles
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -19,6 +19,21 @@ interface DashboardProps {
 }
 
 export default function Dashboard({ eventId, adminKey: propAdminKey, onNavigateHome }: DashboardProps) {
+  const getEventTypeBadge = (type?: string | null) => {
+    switch (type) {
+      case 'class':
+        return { label: 'Class / Lecture', icon: BookOpen, className: 'bg-blue-50 border-blue-100 text-blue-700' };
+      case 'school':
+        return { label: 'School Activity', icon: GraduationCap, className: 'bg-purple-50 border-purple-100 text-purple-700' };
+      case 'meeting':
+        return { label: 'Meeting / Team', icon: Briefcase, className: 'bg-amber-50 border-amber-100 text-amber-700' };
+      case 'event':
+        return { label: 'Event / Seminar', icon: Sparkles, className: 'bg-rose-50 border-rose-100 text-rose-700' };
+      default:
+        return null;
+    }
+  };
+
   const [event, setEvent] = useState<Event | null>(null);
   const [attendees, setAttendees] = useState<Attendee[]>([]);
   const [loading, setLoading] = useState(true);
@@ -123,7 +138,8 @@ export default function Dashboard({ eventId, adminKey: propAdminKey, onNavigateH
           requireGeolocation: data.requireGeolocation !== undefined ? data.requireGeolocation : true,
           customQuestion: data.customQuestion !== undefined ? data.customQuestion : null,
           customQuestion2: data.customQuestion2 !== undefined ? data.customQuestion2 : null,
-          customQuestion3: data.customQuestion3 !== undefined ? data.customQuestion3 : null
+          customQuestion3: data.customQuestion3 !== undefined ? data.customQuestion3 : null,
+          eventType: data.eventType !== undefined ? data.eventType : null
         });
       }
     }).catch(err => console.error("Error loading event doc", err));
@@ -447,14 +463,27 @@ export default function Dashboard({ eventId, adminKey: propAdminKey, onNavigateH
             <ArrowLeft className="w-4 h-4 mr-1.5" />
             Back to Portal
           </button>
-          <div className="flex items-center space-x-2">
+          <div className="flex flex-wrap items-center gap-2">
             <h1 className="text-3xl font-extrabold font-display text-gray-900 tracking-tight">
               {event.name}
             </h1>
-            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-emerald-50 text-emerald-700 border border-emerald-100 animate-pulse">
-              <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full mr-1.5"></span>
-              Live Listening
-            </span>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-emerald-50 text-emerald-700 border border-emerald-100 animate-pulse">
+                <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full mr-1.5"></span>
+                Live Listening
+              </span>
+              {(() => {
+                const badge = getEventTypeBadge(event.eventType);
+                if (!badge) return null;
+                const IconComponent = badge.icon;
+                return (
+                  <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold border ${badge.className}`}>
+                    <IconComponent className="w-3.5 h-3.5 mr-1" />
+                    {badge.label}
+                  </span>
+                );
+              })()}
+            </div>
           </div>
           {event.creatorName && (
             <p className="text-sm font-semibold text-gray-750 mt-1.5 flex items-center">

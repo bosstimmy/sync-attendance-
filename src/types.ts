@@ -12,6 +12,7 @@ export interface Event {
   customQuestion?: string | null;
   customQuestion2?: string | null;
   customQuestion3?: string | null;
+  eventType?: string | null;
 }
 
 export interface Attendee {

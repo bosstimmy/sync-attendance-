@@ -1,7 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { db, getOrCreateUser, handleFirestoreError, OperationType } from '../lib/firebase';
 import { doc, setDoc, serverTimestamp } from 'firebase/firestore';
-import { Plus, Calendar, Shield, ExternalLink, Copy, Check, Trash2, ArrowLeft, MapPin } from 'lucide-react';
+import { 
+  Plus, Calendar, Shield, ExternalLink, Copy, Check, Trash2, ArrowLeft, MapPin,
+  BookOpen, GraduationCap, Briefcase, Sparkles, Settings
+} from 'lucide-react';
 import { motion } from 'motion/react';
 
 interface LocalEvent {
@@ -25,6 +28,7 @@ export default function CreateEvent({ onNavigate }: CreateEventProps) {
   const [creatorName, setCreatorName] = useState('');
 
   // Custom Form Configurations
+  const [eventType, setEventType] = useState('custom');
   const [requireGender, setRequireGender] = useState(true);
   const [requireMatricNumber, setRequireMatricNumber] = useState(false);
   const [requireGeolocation, setRequireGeolocation] = useState(true);
@@ -32,6 +36,42 @@ export default function CreateEvent({ onNavigate }: CreateEventProps) {
   const [customQuestion2, setCustomQuestion2] = useState('');
   const [customQuestion3, setCustomQuestion3] = useState('');
   const [visibleQuestionsCount, setVisibleQuestionsCount] = useState(1);
+
+  const handleEventTypeChange = (type: string) => {
+    setEventType(type);
+    if (type === 'class') {
+      setRequireMatricNumber(true);
+      setCustomQuestion('Which department or course track are you in?');
+      setCustomQuestion2('Is this your first class this semester?');
+      setCustomQuestion3('');
+      setVisibleQuestionsCount(2);
+    } else if (type === 'school') {
+      setRequireMatricNumber(true);
+      setCustomQuestion('What is your grade or year of study?');
+      setCustomQuestion2('Which school club or house do you belong to?');
+      setCustomQuestion3('');
+      setVisibleQuestionsCount(2);
+    } else if (type === 'meeting') {
+      setRequireMatricNumber(false);
+      setCustomQuestion('What is your department or team name?');
+      setCustomQuestion2('What is your role or job title?');
+      setCustomQuestion3('');
+      setVisibleQuestionsCount(2);
+    } else if (type === 'event') {
+      setRequireMatricNumber(false);
+      setCustomQuestion('How did you hear about this event?');
+      setCustomQuestion2('Are you an external guest or internal member?');
+      setCustomQuestion3('');
+      setVisibleQuestionsCount(2);
+    } else {
+      // Custom/Other
+      setRequireMatricNumber(false);
+      setCustomQuestion('');
+      setCustomQuestion2('');
+      setCustomQuestion3('');
+      setVisibleQuestionsCount(1);
+    }
+  };
 
   // Load existing events from localStorage on mount
   useEffect(() => {
@@ -110,7 +150,8 @@ export default function CreateEvent({ onNavigate }: CreateEventProps) {
           requireGeolocation,
           customQuestion: (visibleQuestionsCount >= 1 && customQuestion.trim()) ? customQuestion.trim() : null,
           customQuestion2: (visibleQuestionsCount >= 2 && customQuestion2.trim()) ? customQuestion2.trim() : null,
-          customQuestion3: (visibleQuestionsCount >= 3 && customQuestion3.trim()) ? customQuestion3.trim() : null
+          customQuestion3: (visibleQuestionsCount >= 3 && customQuestion3.trim()) ? customQuestion3.trim() : null,
+          eventType: eventType
         });
       } catch (err: any) {
         handleFirestoreError(err, OperationType.CREATE, `events/${eventId}`);
@@ -205,6 +246,39 @@ export default function CreateEvent({ onNavigate }: CreateEventProps) {
         </h2>
 
         <form onSubmit={handleCreate} className="space-y-4">
+          {/* Event Type Dropdown Selection */}
+          <div className="mb-6">
+            <label className="block text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">
+              Select Session Type
+            </label>
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5">
+              {[
+                { id: 'class', label: 'Class / Lecture', icon: BookOpen },
+                { id: 'school', label: 'School Activity', icon: GraduationCap },
+                { id: 'meeting', label: 'Meeting / Team', icon: Briefcase },
+                { id: 'event', label: 'Event / Seminar', icon: Sparkles },
+                { id: 'custom', label: 'Custom / Other', icon: Settings },
+              ].map((type) => {
+                const IconComponent = type.icon;
+                return (
+                  <button
+                    key={type.id}
+                    type="button"
+                    onClick={() => handleEventTypeChange(type.id)}
+                    className={`flex flex-col items-center justify-center p-3.5 rounded-2xl border text-center transition-all cursor-pointer ${
+                      eventType === type.id
+                        ? 'border-indigo-600 bg-indigo-50/70 text-indigo-950 font-semibold shadow-sm ring-2 ring-indigo-600/10'
+                        : 'border-gray-200 bg-white hover:bg-gray-50/50 text-gray-600'
+                    }`}
+                  >
+                    <IconComponent className={`w-5 h-5 mb-1.5 ${eventType === type.id ? 'text-indigo-600' : 'text-gray-400'}`} />
+                    <span className="text-[11px] leading-tight font-medium">{type.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
               <label htmlFor="event-name-input" className="block text-sm font-medium text-gray-700 mb-1.5">
