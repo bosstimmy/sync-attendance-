@@ -3,10 +3,12 @@ import { db, getOrCreateUser } from '../lib/firebase';
 import { doc, getDoc, collection, onSnapshot, setDoc, deleteDoc, serverTimestamp, query, orderBy } from 'firebase/firestore';
 import { Attendee, Event } from '../types';
 import { generateAttendancePDF } from '../lib/pdfGenerator';
+import { googleSignInForGmail, getCachedGmailUser, gmailSignOut, sendAttendanceEmail } from '../lib/emailService';
 import { calculateDistanceInMillimeters, formatProximity, getProximityStatus } from '../lib/geo';
 import { 
   ArrowLeft, Download, Share2, Copy, Check, Search, Trash2, 
-  Users, Calendar, Clock, AlertCircle, ShieldAlert, ShieldCheck, ExternalLink, QrCode, MapPin
+  Users, Calendar, Clock, AlertCircle, ShieldAlert, ShieldCheck, ExternalLink, QrCode, MapPin,
+  Mail, LogOut
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -38,6 +40,23 @@ export default function Dashboard({ eventId, adminKey: propAdminKey, onNavigateH
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [deletingEvent, setDeletingEvent] = useState(false);
   const [showQR, setShowQR] = useState(false);
+  const [showEmailForm, setShowEmailForm] = useState(false);
+  const [gmailUser, setGmailUser] = useState<any>(null);
+  const [recipientEmail, setRecipientEmail] = useState('');
+  const [sendingEmail, setSendingEmail] = useState(false);
+  const [emailSuccess, setEmailSuccess] = useState<string | null>(null);
+  const [emailError, setEmailError] = useState<string | null>(null);
+
+  // Check cached Gmail user session
+  useEffect(() => {
+    const cached = getCachedGmailUser();
+    if (cached.user && cached.token) {
+      setGmailUser(cached.user);
+      if (cached.user.email) {
+        setRecipientEmail(cached.user.email);
+      }
+    }
+  }, [showEmailForm]);
 
   // Computed links
   const attendeeLink = `${window.location.origin}${window.location.pathname}?event=${eventId}`;
@@ -94,10 +113,17 @@ export default function Dashboard({ eventId, adminKey: propAdminKey, onNavigateH
         setEvent({
           id: eventId,
           name: data.name,
+          creatorName: data.creatorName !== undefined ? data.creatorName : null,
           createdAt: data.createdAt?.toDate ? data.createdAt.toDate().toISOString() : new Date().toISOString(),
           creatorUid: data.creatorUid,
           creatorLatitude: data.creatorLatitude !== undefined ? data.creatorLatitude : null,
-          creatorLongitude: data.creatorLongitude !== undefined ? data.creatorLongitude : null
+          creatorLongitude: data.creatorLongitude !== undefined ? data.creatorLongitude : null,
+          requireGender: data.requireGender !== undefined ? data.requireGender : true,
+          requireMatricNumber: data.requireMatricNumber !== undefined ? data.requireMatricNumber : false,
+          requireGeolocation: data.requireGeolocation !== undefined ? data.requireGeolocation : true,
+          customQuestion: data.customQuestion !== undefined ? data.customQuestion : null,
+          customQuestion2: data.customQuestion2 !== undefined ? data.customQuestion2 : null,
+          customQuestion3: data.customQuestion3 !== undefined ? data.customQuestion3 : null
         });
       }
     }).catch(err => console.error("Error loading event doc", err));
@@ -119,7 +145,12 @@ export default function Dashboard({ eventId, adminKey: propAdminKey, onNavigateH
           joinedAt: data.joinedAt?.toDate ? data.joinedAt.toDate().toISOString() : new Date().toISOString(),
           userAgent: data.userAgent,
           latitude: data.latitude !== undefined ? data.latitude : null,
-          longitude: data.longitude !== undefined ? data.longitude : null
+          longitude: data.longitude !== undefined ? data.longitude : null,
+          matricNumber: data.matricNumber !== undefined ? data.matricNumber : null,
+          customResponse: data.customResponse !== undefined ? data.customResponse : null,
+          customResponse2: data.customResponse2 !== undefined ? data.customResponse2 : null,
+          customResponse3: data.customResponse3 !== undefined ? data.customResponse3 : null,
+          deviceId: data.deviceId !== undefined ? data.deviceId : null
         });
       });
       setAttendees(list);
@@ -221,14 +252,110 @@ export default function Dashboard({ eventId, adminKey: propAdminKey, onNavigateH
       attendees, 
       event.createdAt,
       event.creatorLatitude,
-      event.creatorLongitude
+      event.creatorLongitude,
+      event.requireGeolocation !== false,
+      event.requireGender !== false,
+      event.requireMatricNumber,
+      event.customQuestion,
+      event.customQuestion2,
+      event.customQuestion3,
+      event.creatorName
     );
   };
+
+  const handleGmailSignIn = async () => {
+    setEmailError(null);
+    setEmailSuccess(null);
+    try {
+      const result = await googleSignInForGmail();
+      setGmailUser(result.user);
+      if (result.user.email) {
+        setRecipientEmail(result.user.email);
+      }
+    } catch (err: any) {
+      console.error(err);
+      setEmailError(err.message || 'Google authentication failed.');
+    }
+  };
+
+  const handleGmailSignOut = () => {
+    gmailSignOut();
+    setGmailUser(null);
+    setRecipientEmail('');
+    setEmailSuccess(null);
+    setEmailError(null);
+  };
+
+  const handleSendEmailReport = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!event || !recipientEmail) return;
+    
+    setSendingEmail(true);
+    setEmailSuccess(null);
+    setEmailError(null);
+
+    try {
+      // 1. Generate the PDF document in-memory
+      const doc = generateAttendancePDF(
+        event.name, 
+        attendees, 
+        event.createdAt,
+        event.creatorLatitude,
+        event.creatorLongitude,
+        event.requireGeolocation !== false,
+        event.requireGender !== false,
+        event.requireMatricNumber,
+        event.customQuestion,
+        event.customQuestion2,
+        event.customQuestion3,
+        event.creatorName
+      );
+
+      // Extract raw base64 data from pdf instance
+      const dataUri = doc.output('datauristring');
+      const pdfBase64 = dataUri.split(',')[1];
+
+      // 2. Call our send email service
+      await sendAttendanceEmail({
+        recipientEmail: recipientEmail.trim(),
+        eventName: event.name,
+        eventDate: event.createdAt,
+        creatorName: event.creatorName,
+        attendees,
+        pdfBase64
+      });
+
+      setEmailSuccess(`Attendance report has been successfully sent to ${recipientEmail}`);
+    } catch (err: any) {
+      console.error(err);
+      setEmailError(err.message || 'Failed to send report. Please check your credentials or try again.');
+    } finally {
+      setSendingEmail(false);
+    }
+  };
+  
+  const deviceCounts = React.useMemo(() => {
+    const counts: { [key: string]: number } = {};
+    attendees.forEach(att => {
+      if (att.deviceId) {
+        counts[att.deviceId] = (counts[att.deviceId] || 0) + 1;
+      }
+    });
+    return counts;
+  }, [attendees]);
+
+  const duplicateDeviceAttendeesCount = React.useMemo(() => {
+    return attendees.filter(att => att.deviceId && deviceCounts[att.deviceId] > 1).length;
+  }, [attendees, deviceCounts]);
 
   // Filter attendees by search query
   const filteredAttendees = attendees.filter(att => 
     att.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    (att.gender && att.gender.toLowerCase().includes(searchQuery.toLowerCase()))
+    (att.gender && att.gender.toLowerCase().includes(searchQuery.toLowerCase())) ||
+    (att.matricNumber && att.matricNumber.toLowerCase().includes(searchQuery.toLowerCase())) ||
+    (att.customResponse && att.customResponse.toLowerCase().includes(searchQuery.toLowerCase())) ||
+    (att.customResponse2 && att.customResponse2.toLowerCase().includes(searchQuery.toLowerCase())) ||
+    (att.customResponse3 && att.customResponse3.toLowerCase().includes(searchQuery.toLowerCase()))
   );
 
   // Authentication Interface
@@ -329,7 +456,15 @@ export default function Dashboard({ eventId, adminKey: propAdminKey, onNavigateH
               Live Listening
             </span>
           </div>
-          <p className="text-sm text-gray-400 mt-1 flex items-center space-x-3">
+          {event.creatorName && (
+            <p className="text-sm font-semibold text-gray-750 mt-1.5 flex items-center">
+              <span className="bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded-lg text-xs font-medium mr-2 border border-indigo-100/50">
+                Host
+              </span>
+              {event.creatorName}
+            </p>
+          )}
+          <p className="text-sm text-gray-400 mt-1.5 flex items-center space-x-3">
             <span className="flex items-center">
               <Calendar className="w-3.5 h-3.5 mr-1" />
               Created {new Date(event.createdAt).toLocaleDateString()} at {new Date(event.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
@@ -348,6 +483,19 @@ export default function Dashboard({ eventId, adminKey: propAdminKey, onNavigateH
           >
             <Download className="w-4.5 h-4.5 mr-2" />
             Export to PDF
+          </button>
+
+          <button
+            onClick={() => setShowEmailForm(!showEmailForm)}
+            disabled={attendees.length === 0}
+            className={`inline-flex items-center px-4 py-2.5 rounded-xl border font-medium transition-all text-sm cursor-pointer disabled:cursor-not-allowed ${
+              showEmailForm 
+                ? 'bg-indigo-50 border-indigo-200 text-indigo-700 hover:bg-indigo-100' 
+                : 'bg-white border-gray-200 hover:bg-gray-50 text-gray-700 disabled:bg-gray-50 disabled:text-gray-400'
+            }`}
+          >
+            <Mail className="w-4.5 h-4.5 mr-1.5 text-indigo-500 disabled:text-gray-400" />
+            Email Report
           </button>
           
           <button
@@ -414,6 +562,126 @@ export default function Dashboard({ eventId, adminKey: propAdminKey, onNavigateH
         )}
       </AnimatePresence>
 
+      {/* Email Report Banner/Form */}
+      <AnimatePresence>
+        {showEmailForm && (
+          <motion.div
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -10 }}
+            className="bg-indigo-50/50 border border-indigo-100 rounded-3xl p-6 mb-8 flex flex-col md:flex-row items-stretch gap-6"
+            id="email-report-card"
+          >
+            {/* Left side: status/instructions */}
+            <div className="flex-1 flex flex-col justify-between">
+              <div>
+                <h3 className="text-lg font-bold text-gray-900 font-display flex items-center">
+                  <Mail className="w-5 h-5 mr-2 text-indigo-600 animate-pulse" />
+                  Email Attendance Report
+                </h3>
+                <p className="text-gray-500 text-sm mt-1 max-w-xl">
+                  Connect your Google Account to email this report securely using the official Gmail API. 
+                  The recipient will receive a beautifully styled summary with the official PDF report attached.
+                </p>
+              </div>
+
+              {gmailUser && (
+                <div className="mt-4 p-3 bg-white/80 border border-indigo-100/50 rounded-xl flex items-center justify-between">
+                  <div className="flex items-center space-x-2.5">
+                    {gmailUser.photoURL ? (
+                      <img src={gmailUser.photoURL} alt="Google Profile" className="w-8 h-8 rounded-full border border-indigo-200" referrerPolicy="no-referrer" />
+                    ) : (
+                      <div className="w-8 h-8 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center font-bold text-sm">
+                        {gmailUser.displayName?.[0] || 'U'}
+                      </div>
+                    )}
+                    <div>
+                      <p className="text-xs font-semibold text-gray-850">{gmailUser.displayName}</p>
+                      <p className="text-[11px] text-gray-400">{gmailUser.email}</p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={handleGmailSignOut}
+                    className="inline-flex items-center text-xs text-red-500 hover:text-red-700 font-medium transition-colors cursor-pointer"
+                  >
+                    <LogOut className="w-3.5 h-3.5 mr-1" />
+                    Sign Out
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* Right side: Authentication or Sender Form */}
+            <div className="w-full md:w-96 bg-white rounded-2xl border border-indigo-100 p-5 flex flex-col justify-center">
+              {!gmailUser ? (
+                <div className="text-center py-4 flex flex-col items-center justify-center">
+                  <p className="text-xs text-gray-400 font-medium mb-3">Google integration is required to send reports via Gmail.</p>
+                  
+                  <button
+                    onClick={handleGmailSignIn}
+                    className="w-full inline-flex items-center justify-center bg-white hover:bg-gray-50 text-gray-700 font-semibold border border-gray-300 rounded-xl px-4 py-2.5 shadow-sm text-sm transition-colors cursor-pointer"
+                  >
+                    <svg className="w-5 h-5 mr-3 shrink-0" viewBox="0 0 48 48">
+                      <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"></path>
+                      <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"></path>
+                      <path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"></path>
+                      <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"></path>
+                    </svg>
+                    Sign in with Google
+                  </button>
+                  
+                  {emailError && (
+                    <p className="text-[11px] text-red-500 font-medium mt-3">{emailError}</p>
+                  )}
+                </div>
+              ) : (
+                <form onSubmit={handleSendEmailReport} className="space-y-3.5">
+                  <div>
+                    <label htmlFor="recipient-email-input" className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">
+                      Recipient's Email
+                    </label>
+                    <input
+                      type="email"
+                      id="recipient-email-input"
+                      value={recipientEmail}
+                      onChange={(e) => setRecipientEmail(e.target.value)}
+                      placeholder="e.g., manager@example.com"
+                      required
+                      className="w-full px-3 py-2 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 text-sm text-gray-900 bg-gray-50/50"
+                    />
+                  </div>
+
+                  <div className="flex items-center space-x-2 text-[11px] text-gray-400">
+                    <div className="w-1.5 h-1.5 bg-indigo-500 rounded-full"></div>
+                    <span>Includes PDF Attachment (~20KB)</span>
+                  </div>
+
+                  {emailSuccess && (
+                    <p className="text-[11px] text-emerald-600 font-semibold bg-emerald-50 border border-emerald-100/50 px-2.5 py-2 rounded-lg">
+                      {emailSuccess}
+                    </p>
+                  )}
+
+                  {emailError && (
+                    <p className="text-[11px] text-red-500 font-semibold bg-red-50 border border-red-100/50 px-2.5 py-2 rounded-lg">
+                      {emailError}
+                    </p>
+                  )}
+
+                  <button
+                    type="submit"
+                    disabled={sendingEmail || !recipientEmail}
+                    className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-100 disabled:text-gray-400 text-white font-semibold rounded-xl text-xs transition-colors flex items-center justify-center cursor-pointer shadow-sm disabled:cursor-not-allowed"
+                  >
+                    {sendingEmail ? 'Sending Report...' : 'Send via Gmail'}
+                  </button>
+                </form>
+              )}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Link Distribution Box */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8" id="link-boxes">
         <div className="bg-white rounded-2xl border border-gray-100 p-5 fancy-shadow">
@@ -446,7 +714,7 @@ export default function Dashboard({ eventId, adminKey: propAdminKey, onNavigateH
       </div>
 
       {/* Numerical Insights */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8" id="stat-cards">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8" id="stat-cards">
         <div className="bg-white rounded-2xl border border-gray-100 p-5 fancy-shadow flex items-center space-x-4">
           <div className="p-3.5 bg-indigo-50 text-indigo-600 rounded-xl shrink-0">
             <Users className="w-6 h-6" />
@@ -489,6 +757,31 @@ export default function Dashboard({ eventId, adminKey: propAdminKey, onNavigateH
             </p>
           </div>
         </div>
+
+        <div className={`rounded-2xl border p-5 fancy-shadow flex items-center space-x-4 transition-colors ${
+          duplicateDeviceAttendeesCount > 0 
+            ? 'border-red-100 bg-red-50/10' 
+            : 'border-gray-100 bg-white'
+        }`}>
+          <div className={`p-3.5 rounded-xl shrink-0 ${
+            duplicateDeviceAttendeesCount > 0 
+              ? 'bg-red-50 text-red-600' 
+              : 'bg-gray-50 text-gray-400'
+          }`}>
+            <AlertCircle className="w-6 h-6" />
+          </div>
+          <div>
+            <p className="text-xs text-gray-400 font-semibold tracking-wide uppercase">Shared Devices</p>
+            <p className={`text-lg font-bold mt-0.5 ${
+              duplicateDeviceAttendeesCount > 0 ? 'text-red-600' : 'text-gray-500'
+            }`}>
+              {duplicateDeviceAttendeesCount > 0 
+                ? `${duplicateDeviceAttendeesCount} sign-ins` 
+                : 'None detected'
+              }
+            </p>
+          </div>
+        </div>
       </div>
 
       {/* Main Table Card */}
@@ -523,8 +816,12 @@ export default function Dashboard({ eventId, adminKey: propAdminKey, onNavigateH
                 <tr className="bg-gray-50/50 border-b border-gray-100/80 text-xs font-semibold text-gray-400 uppercase tracking-wider">
                   <th className="py-3 px-6 text-center w-12">#</th>
                   <th className="py-3 px-6">Name</th>
-                  <th className="py-3 px-6">Gender</th>
-                  <th className="py-3 px-6">Location</th>
+                  {(!event || event.requireGender !== false) && <th className="py-3 px-6">Gender</th>}
+                  {event?.requireMatricNumber && <th className="py-3 px-6">Matric Number</th>}
+                  {event?.customQuestion && <th className="py-3 px-6">Answer 1 ({event.customQuestion})</th>}
+                  {event?.customQuestion2 && <th className="py-3 px-6">Answer 2 ({event.customQuestion2})</th>}
+                  {event?.customQuestion3 && <th className="py-3 px-6">Answer 3 ({event.customQuestion3})</th>}
+                  {(!event || event.requireGeolocation !== false) && <th className="py-3 px-6">In-Class Status</th>}
                   <th className="py-3 px-6">Join Time</th>
                   <th className="py-3 px-6">Join Date</th>
                   <th className="py-3 px-6 text-right w-20 pr-8">Actions</th>
@@ -541,66 +838,98 @@ export default function Dashboard({ eventId, adminKey: propAdminKey, onNavigateH
                       <td className="py-4 px-6 text-center text-gray-400 font-mono text-xs">
                         {filteredAttendees.length - idx}
                       </td>
-                      <td className="py-4 px-6 font-semibold text-gray-900">
-                        {att.name}
-                      </td>
                       <td className="py-4 px-6">
-                        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold border ${
-                          att.gender === 'Male' ? 'bg-blue-50/70 text-blue-700 border-blue-100/50' :
-                          att.gender === 'Female' ? 'bg-pink-50/70 text-pink-700 border-pink-100/50' :
-                          att.gender === 'Non-Binary' ? 'bg-purple-50/70 text-purple-700 border-purple-100/50' :
-                          att.gender === 'Other' ? 'bg-indigo-50/70 text-indigo-700 border-indigo-100/50' :
-                          'bg-gray-50/70 text-gray-600 border-gray-200/40'
-                        }`}>
-                          {att.gender || 'Not specified'}
-                        </span>
+                        <div className="flex flex-col">
+                          <span className="font-semibold text-gray-900">{att.name}</span>
+                          {att.deviceId && deviceCounts[att.deviceId] > 1 && (
+                            <span className="inline-flex items-center text-[10px] text-red-600 bg-red-50 border border-red-100/50 px-1.5 py-0.5 rounded-md font-medium mt-1 w-max">
+                              <AlertCircle className="w-3 h-3 mr-1 shrink-0" />
+                              Shared Device (Same Phone)
+                            </span>
+                          )}
+                        </div>
                       </td>
-                      <td className="py-4 px-6">
-                        {att.latitude && att.longitude ? (
-                          <div className="flex flex-col space-y-1" id={`att-proximity-${att.id}`}>
-                            {(() => {
-                              const distMm = calculateDistanceInMillimeters(
-                                event?.creatorLatitude,
-                                event?.creatorLongitude,
-                                att.latitude,
-                                att.longitude
-                              );
-                              const status = getProximityStatus(distMm);
-                              return (
-                                <>
-                                  <div className="flex flex-wrap items-center gap-1.5">
-                                    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border ${status.className}`}>
-                                      {status.label}
-                                    </span>
-                                    {distMm !== null && (
-                                      <span className="text-[11px] font-mono font-semibold text-gray-600">
-                                        {formatProximity(distMm)}
-                                      </span>
-                                    )}
-                                  </div>
-                                  <div className="text-[11px] text-gray-400 flex items-center space-x-1.5">
-                                    <span className="font-mono">Token: {att.latitude.toFixed(5)}, {att.longitude.toFixed(5)}</span>
-                                    <span>•</span>
-                                    <a 
-                                      href={`https://www.google.com/maps?q=${att.latitude},${att.longitude}`}
-                                      target="_blank"
-                                      rel="noopener noreferrer"
-                                      className="text-indigo-600 hover:text-indigo-800 hover:underline"
-                                    >
-                                      View Map
-                                    </a>
-                                  </div>
-                                </>
-                              );
-                            })()}
-                          </div>
-                        ) : (
-                          <span className="text-gray-400 italic text-xs flex items-center space-x-1">
-                            <span>⚠️</span>
-                            <span>No GPS token</span>
+                      {(!event || event.requireGender !== false) && (
+                        <td className="py-4 px-6">
+                          <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold border ${
+                            att.gender === 'Male' ? 'bg-blue-50/70 text-blue-700 border-blue-100/50' :
+                            att.gender === 'Female' ? 'bg-pink-50/70 text-pink-700 border-pink-100/50' :
+                            att.gender === 'Non-Binary' ? 'bg-purple-50/70 text-purple-700 border-purple-100/50' :
+                            att.gender === 'Other' ? 'bg-indigo-50/70 text-indigo-700 border-indigo-100/50' :
+                            'bg-gray-50/70 text-gray-600 border-gray-200/40'
+                          }`}>
+                            {att.gender || 'Not specified'}
                           </span>
-                        )}
-                      </td>
+                        </td>
+                      )}
+                      {event?.requireMatricNumber && (
+                        <td className="py-4 px-6 font-mono text-gray-700">
+                          {att.matricNumber || <span className="text-gray-400 italic text-xs">Not provided</span>}
+                        </td>
+                      )}
+                      {event?.customQuestion && (
+                        <td className="py-4 px-6 text-gray-700 max-w-[200px] truncate" title={att.customResponse || ''}>
+                          {att.customResponse || <span className="text-gray-400 italic text-xs">Not provided</span>}
+                        </td>
+                      )}
+                      {event?.customQuestion2 && (
+                        <td className="py-4 px-6 text-gray-700 max-w-[200px] truncate" title={att.customResponse2 || ''}>
+                          {att.customResponse2 || <span className="text-gray-400 italic text-xs">Not provided</span>}
+                        </td>
+                      )}
+                      {event?.customQuestion3 && (
+                        <td className="py-4 px-6 text-gray-700 max-w-[200px] truncate" title={att.customResponse3 || ''}>
+                          {att.customResponse3 || <span className="text-gray-400 italic text-xs">Not provided</span>}
+                        </td>
+                      )}
+                      {(!event || event.requireGeolocation !== false) && (
+                        <td className="py-4 px-6">
+                          {att.latitude && att.longitude ? (
+                            <div className="flex flex-col space-y-1" id={`att-proximity-${att.id}`}>
+                              {(() => {
+                                const distMm = calculateDistanceInMillimeters(
+                                  event?.creatorLatitude,
+                                  event?.creatorLongitude,
+                                  att.latitude,
+                                  att.longitude
+                                );
+                                const status = getProximityStatus(distMm);
+                                return (
+                                  <>
+                                    <div className="flex flex-wrap items-center gap-1.5">
+                                      <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border ${status.className}`}>
+                                        {status.label}
+                                      </span>
+                                      {distMm !== null && (
+                                        <span className="text-[11px] font-mono font-semibold text-gray-600">
+                                          {formatProximity(distMm)}
+                                        </span>
+                                      )}
+                                    </div>
+                                    <div className="text-[11px] text-gray-400 flex items-center space-x-1.5">
+                                      <span className="font-mono">Token: {att.latitude.toFixed(5)}, {att.longitude.toFixed(5)}</span>
+                                      <span>•</span>
+                                      <a 
+                                        href={`https://www.google.com/maps?q=${att.latitude},${att.longitude}`}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="text-indigo-600 hover:text-indigo-800 hover:underline"
+                                      >
+                                        View Map
+                                      </a>
+                                    </div>
+                                  </>
+                                );
+                              })()}
+                            </div>
+                          ) : (
+                            <span className="text-gray-400 italic text-xs flex items-center space-x-1">
+                              <span>⚠️</span>
+                              <span>No GPS token</span>
+                            </span>
+                          )}
+                        </td>
+                      )}
                       <td className="py-4 px-6 text-gray-600">
                         {joinTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
                       </td>

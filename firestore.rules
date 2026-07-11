@@ -20,7 +20,14 @@ service cloud.firestore {
         && data.creatorUid is string
         && data.creatorUid.size() <= 128
         && (!('creatorLatitude' in data) || data.creatorLatitude is number || data.creatorLatitude == null)
-        && (!('creatorLongitude' in data) || data.creatorLongitude is number || data.creatorLongitude == null);
+        && (!('creatorLongitude' in data) || data.creatorLongitude is number || data.creatorLongitude == null)
+        && (!('requireGender' in data) || data.requireGender is bool)
+        && (!('requireMatricNumber' in data) || data.requireMatricNumber is bool)
+        && (!('requireGeolocation' in data) || data.requireGeolocation is bool)
+        && (!('customQuestion' in data) || data.customQuestion is string || data.customQuestion == null)
+        && (!('customQuestion2' in data) || data.customQuestion2 is string || data.customQuestion2 == null)
+        && (!('customQuestion3' in data) || data.customQuestion3 is string || data.customQuestion3 == null)
+        && (!('creatorName' in data) || data.creatorName is string || data.creatorName == null);
     }
 
     // 3. Admin Key Validation Helper
@@ -35,15 +42,19 @@ service cloud.firestore {
 
     // 4. Attendee Validation Helper
     function isValidAttendee(data) {
-      return data.keys().hasAll(['name', 'joinedAt', 'gender'])
+      return data.keys().hasAll(['name', 'joinedAt'])
         && data.name is string
         && data.name.size() > 0
         && data.name.size() <= 100
-        && data.gender is string
-        && data.gender.size() > 0
-        && data.gender.size() <= 50
+        && (!('gender' in data) || data.gender is string || data.gender == null)
+        && (!('matricNumber' in data) || data.matricNumber is string || data.matricNumber == null)
+        && (!('customResponse' in data) || data.customResponse is string || data.customResponse == null)
+        && (!('customResponse2' in data) || data.customResponse2 is string || data.customResponse2 == null)
+        && (!('customResponse3' in data) || data.customResponse3 is string || data.customResponse3 == null)
         && (!('latitude' in data) || data.latitude is number || data.latitude == null)
-        && (!('longitude' in data) || data.longitude is number || data.longitude == null);
+        && (!('longitude' in data) || data.longitude is number || data.longitude == null)
+        && (!('deviceId' in data) || data.deviceId is string || data.deviceId == null)
+        && (!('userAgent' in data) || data.userAgent is string || data.userAgent == null);
     }
 
     // Matches for Events

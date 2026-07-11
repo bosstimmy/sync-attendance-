@@ -22,6 +22,17 @@ export default function CreateEvent({ onNavigate }: CreateEventProps) {
   const [myEvents, setMyEvents] = useState<LocalEvent[]>([]);
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
+  const [creatorName, setCreatorName] = useState('');
+
+  // Custom Form Configurations
+  const [requireGender, setRequireGender] = useState(true);
+  const [requireMatricNumber, setRequireMatricNumber] = useState(false);
+  const [requireGeolocation, setRequireGeolocation] = useState(true);
+  const [customQuestion, setCustomQuestion] = useState('');
+  const [customQuestion2, setCustomQuestion2] = useState('');
+  const [customQuestion3, setCustomQuestion3] = useState('');
+  const [visibleQuestionsCount, setVisibleQuestionsCount] = useState(1);
+
   // Load existing events from localStorage on mount
   useEffect(() => {
     const saved = localStorage.getItem('attendance_tracker_events');
@@ -52,34 +63,36 @@ export default function CreateEvent({ onNavigate }: CreateEventProps) {
       const eventId = 'ev_' + Math.random().toString(36).substring(2, 11);
       const adminKey = 'adm_' + Math.random().toString(36).substring(2, 15);
 
-      // 3. Attempt to capture high-precision coordinator location token
+      // 3. Attempt to capture high-precision coordinator location token if selected
       let creatorLatitude: number | null = null;
       let creatorLongitude: number | null = null;
 
-      try {
-        const coords = await new Promise<{ latitude: number | null; longitude: number | null }>((resolve) => {
-          if (!navigator.geolocation) {
-            resolve({ latitude: null, longitude: null });
-            return;
-          }
-          navigator.geolocation.getCurrentPosition(
-            (position) => {
-              resolve({
-                latitude: position.coords.latitude,
-                longitude: position.coords.longitude
-              });
-            },
-            (error) => {
-              console.warn("Coordinator geolocation acquisition failed", error);
+      if (requireGeolocation) {
+        try {
+          const coords = await new Promise<{ latitude: number | null; longitude: number | null }>((resolve) => {
+            if (!navigator.geolocation) {
               resolve({ latitude: null, longitude: null });
-            },
-            { enableHighAccuracy: true, timeout: 5000, maximumAge: 0 }
-          );
-        });
-        creatorLatitude = coords.latitude;
-        creatorLongitude = coords.longitude;
-      } catch (err) {
-        console.error("Coordinator coordinate fetch error:", err);
+              return;
+            }
+            navigator.geolocation.getCurrentPosition(
+              (position) => {
+                resolve({
+                  latitude: position.coords.latitude,
+                  longitude: position.coords.longitude
+                });
+              },
+              (error) => {
+                console.warn("Coordinator geolocation acquisition failed", error);
+                resolve({ latitude: null, longitude: null });
+              },
+              { enableHighAccuracy: true, timeout: 5000, maximumAge: 0 }
+            );
+          });
+          creatorLatitude = coords.latitude;
+          creatorLongitude = coords.longitude;
+        } catch (err) {
+          console.error("Coordinator coordinate fetch error:", err);
+        }
       }
 
       // 4. Create Event Document (Public info)
@@ -87,10 +100,17 @@ export default function CreateEvent({ onNavigate }: CreateEventProps) {
       try {
         await setDoc(eventRef, {
           name: eventName.trim(),
+          creatorName: creatorName.trim() ? creatorName.trim() : null,
           createdAt: serverTimestamp(),
           creatorUid: user.uid,
           creatorLatitude,
-          creatorLongitude
+          creatorLongitude,
+          requireGender,
+          requireMatricNumber,
+          requireGeolocation,
+          customQuestion: (visibleQuestionsCount >= 1 && customQuestion.trim()) ? customQuestion.trim() : null,
+          customQuestion2: (visibleQuestionsCount >= 2 && customQuestion2.trim()) ? customQuestion2.trim() : null,
+          customQuestion3: (visibleQuestionsCount >= 3 && customQuestion3.trim()) ? customQuestion3.trim() : null
         });
       } catch (err: any) {
         handleFirestoreError(err, OperationType.CREATE, `events/${eventId}`);
@@ -185,28 +205,181 @@ export default function CreateEvent({ onNavigate }: CreateEventProps) {
         </h2>
 
         <form onSubmit={handleCreate} className="space-y-4">
-          <div>
-            <label htmlFor="event-name-input" className="block text-sm font-medium text-gray-700 mb-1.5">
-              Event or Class Name
-            </label>
-            <input
-              type="text"
-              id="event-name-input"
-              value={eventName}
-              onChange={(e) => setEventName(e.target.value)}
-              placeholder="e.g., Computer Science 101 Lecture"
-              maxLength={100}
-              className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-colors text-gray-900 bg-gray-50/50"
-              disabled={loading}
-            />
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label htmlFor="event-name-input" className="block text-sm font-medium text-gray-700 mb-1.5">
+                Event or Class Name
+              </label>
+              <input
+                type="text"
+                id="event-name-input"
+                value={eventName}
+                onChange={(e) => setEventName(e.target.value)}
+                placeholder="e.g., Computer Science 101 Lecture"
+                maxLength={100}
+                className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-colors text-gray-900 bg-gray-50/50"
+                disabled={loading}
+              />
+            </div>
+
+            <div>
+              <label htmlFor="creator-name-input" className="block text-sm font-medium text-gray-700 mb-1.5">
+                Instructor / Host Name (Optional)
+              </label>
+              <input
+                type="text"
+                id="creator-name-input"
+                value={creatorName}
+                onChange={(e) => setCreatorName(e.target.value)}
+                placeholder="e.g., Dr. Jane Smith"
+                maxLength={100}
+                className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-colors text-gray-900 bg-gray-50/50"
+                disabled={loading}
+              />
+            </div>
           </div>
 
-          <div className="flex items-start space-x-2 bg-indigo-50/50 p-3.5 rounded-xl border border-indigo-100/50 text-xs text-indigo-700/95" id="creation-geo-notice">
-            <MapPin className="w-4 h-4 text-indigo-500 shrink-0 mt-0.5" />
-            <span className="leading-relaxed">
-              <strong>Millimeter Proximity Verifier:</strong> Your current location coordinates are securely logged as a reference token. Attendees' check-in coordinates will be compared to calculate their distance in millimeters, helping you judge attendance authenticity.
-            </span>
+          {/* Custom Settings / Requirements */}
+          <div className="bg-gray-50/50 rounded-2xl p-5 border border-gray-100/85 space-y-4">
+            <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-1">
+              Attendance Form Customization
+            </h3>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+              <label className="flex items-center space-x-3 cursor-pointer p-3.5 rounded-xl border border-gray-100 bg-white hover:bg-gray-50/50 transition-colors">
+                <input
+                  type="checkbox"
+                  checked={requireGender}
+                  onChange={(e) => setRequireGender(e.target.checked)}
+                  className="w-4.5 h-4.5 text-indigo-600 border-gray-300 rounded focus:ring-indigo-500/30 accent-indigo-600"
+                />
+                <span className="text-sm font-medium text-gray-700">Ask for Gender</span>
+              </label>
+
+              <label className="flex items-center space-x-3 cursor-pointer p-3.5 rounded-xl border border-gray-100 bg-white hover:bg-gray-50/50 transition-colors">
+                <input
+                  type="checkbox"
+                  checked={requireMatricNumber}
+                  onChange={(e) => setRequireMatricNumber(e.target.checked)}
+                  className="w-4.5 h-4.5 text-indigo-600 border-gray-300 rounded focus:ring-indigo-500/30 accent-indigo-600"
+                />
+                <span className="text-sm font-medium text-gray-700">Ask for Matriculation Number</span>
+              </label>
+
+              <label className="flex items-center space-x-3 cursor-pointer p-3.5 rounded-xl border border-gray-100 bg-white hover:bg-gray-50/50 transition-colors sm:col-span-2">
+                <input
+                  type="checkbox"
+                  checked={requireGeolocation}
+                  onChange={(e) => setRequireGeolocation(e.target.checked)}
+                  className="w-4.5 h-4.5 text-indigo-600 border-gray-300 rounded focus:ring-indigo-500/30 accent-indigo-600"
+                />
+                <span className="text-sm font-medium text-gray-700">Enable Geolocation Millimeter Verification</span>
+              </label>
+            </div>
+
+            <div className="space-y-3.5 pt-1.5">
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-xs font-bold text-gray-400 uppercase tracking-wider">
+                  Custom Questions (Optional)
+                </span>
+                {visibleQuestionsCount < 3 && (
+                  <button
+                    type="button"
+                    onClick={() => setVisibleQuestionsCount(prev => prev + 1)}
+                    className="inline-flex items-center text-xs font-semibold text-indigo-600 hover:text-indigo-700 bg-indigo-50 hover:bg-indigo-100/75 px-2.5 py-1.5 rounded-lg transition-colors cursor-pointer"
+                  >
+                    <Plus className="w-3.5 h-3.5 mr-1" /> Add question
+                  </button>
+                )}
+              </div>
+
+              <div>
+                <label htmlFor="custom-question-input" className="block text-xs font-semibold text-gray-500 mb-1.5 uppercase tracking-wide">
+                  Custom Question 1
+                </label>
+                <input
+                  type="text"
+                  id="custom-question-input"
+                  value={customQuestion}
+                  onChange={(e) => setCustomQuestion(e.target.value)}
+                  placeholder="e.g., Which department or course track are you in?"
+                  maxLength={120}
+                  className="w-full px-4 py-2.5 text-sm rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-colors text-gray-800 bg-white"
+                  disabled={loading}
+                />
+              </div>
+
+              {visibleQuestionsCount >= 2 && (
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label htmlFor="custom-question-2-input" className="block text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                      Custom Question 2
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setVisibleQuestionsCount(1);
+                        setCustomQuestion2('');
+                        setCustomQuestion3('');
+                      }}
+                      className="text-xs text-red-500 hover:text-red-600 font-medium cursor-pointer"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                  <input
+                    type="text"
+                    id="custom-question-2-input"
+                    value={customQuestion2}
+                    onChange={(e) => setCustomQuestion2(e.target.value)}
+                    placeholder="e.g., What is your major/specialization?"
+                    maxLength={120}
+                    className="w-full px-4 py-2.5 text-sm rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-colors text-gray-800 bg-white"
+                    disabled={loading}
+                  />
+                </div>
+              )}
+
+              {visibleQuestionsCount >= 3 && (
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label htmlFor="custom-question-3-input" className="block text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                      Custom Question 3
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setVisibleQuestionsCount(2);
+                        setCustomQuestion3('');
+                      }}
+                      className="text-xs text-red-500 hover:text-red-600 font-medium cursor-pointer"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                  <input
+                    type="text"
+                    id="custom-question-3-input"
+                    value={customQuestion3}
+                    onChange={(e) => setCustomQuestion3(e.target.value)}
+                    placeholder="e.g., Any additional information or comments?"
+                    maxLength={120}
+                    className="w-full px-4 py-2.5 text-sm rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-colors text-gray-800 bg-white"
+                    disabled={loading}
+                  />
+                </div>
+              )}
+            </div>
           </div>
+
+          {requireGeolocation && (
+            <div className="flex items-start space-x-2 bg-indigo-50/50 p-3.5 rounded-xl border border-indigo-100/50 text-xs text-indigo-700/95 shadow-sm" id="creation-geo-notice">
+              <MapPin className="w-4 h-4 text-indigo-500 shrink-0 mt-0.5" />
+              <span className="leading-relaxed">
+                <strong>Millimeter Proximity Verifier:</strong> Your current location coordinates are securely logged as a reference token. Attendees' check-in coordinates will be compared to calculate their distance in millimeters, helping you judge attendance authenticity.
+              </span>
+            </div>
+          )}
 
           {error && (
             <div className="p-3 bg-red-50 text-red-600 text-sm rounded-xl font-medium" id="creation-error">
