@@ -17,6 +17,42 @@
         "creatorUid": {
           "type": "string",
           "description": "The UID of the user who created the event"
+        },
+        "creatorLatitude": {
+          "type": "number",
+          "description": "Geographical coordinate latitude of the creator at event creation"
+        },
+        "creatorLongitude": {
+          "type": "number",
+          "description": "Geographical coordinate longitude of the creator at event creation"
+        },
+        "requireGender": {
+          "type": "boolean",
+          "description": "Whether to require attendees to state their gender"
+        },
+        "requireMatricNumber": {
+          "type": "boolean",
+          "description": "Whether to require attendees to state their class matriculation number"
+        },
+        "requireGeolocation": {
+          "type": "boolean",
+          "description": "Whether to require geolocation verification for attendance"
+        },
+        "customQuestion": {
+          "type": "string",
+          "description": "An optional custom text question to request from attendees"
+        },
+        "customQuestion2": {
+          "type": "string",
+          "description": "A second optional custom text question to request from attendees"
+        },
+        "customQuestion3": {
+          "type": "string",
+          "description": "A third optional custom text question to request from attendees"
+        },
+        "creatorName": {
+          "type": "string",
+          "description": "Name of the event host, instructor, or creator"
         }
       },
       "required": ["name", "createdAt", "creatorUid"]
@@ -88,9 +124,29 @@
         "userAgent": {
           "type": "string",
           "description": "Browser details of the attendee"
+        },
+        "matricNumber": {
+          "type": "string",
+          "description": "The matriculation number of the attendee"
+        },
+        "customResponse": {
+          "type": "string",
+          "description": "The attendee's answer to the custom question"
+        },
+        "customResponse2": {
+          "type": "string",
+          "description": "The attendee's answer to the second custom question"
+        },
+        "customResponse3": {
+          "type": "string",
+          "description": "The attendee's answer to the third custom question"
+        },
+        "deviceId": {
+          "type": "string",
+          "description": "Unique device identifier generated in local storage to track multiple check-ins from the same device"
         }
       },
-      "required": ["name", "gender", "joinedAt"]
+      "required": ["name", "joinedAt"]
     }
   },
   "firestore": {

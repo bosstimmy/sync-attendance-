@@ -1,8 +1,22 @@
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { Attendee } from '../types';
+import { calculateDistanceInMillimeters, formatProximity, getProximityStatus } from './geo';
 
-export function generateAttendancePDF(eventName: string, attendees: Attendee[], eventDate: string) {
+export function generateAttendancePDF(
+  eventName: string, 
+  attendees: Attendee[], 
+  eventDate: string,
+  creatorLatitude?: number | null,
+  creatorLongitude?: number | null,
+  requireGeolocation: boolean = true,
+  requireGender: boolean = true,
+  requireMatricNumber: boolean = false,
+  customQuestion: string | null = null,
+  customQuestion2: string | null = null,
+  customQuestion3: string | null = null,
+  creatorName?: string | null
+) {
   const doc = new jsPDF({
     orientation: 'portrait',
     unit: 'mm',
@@ -34,7 +48,7 @@ export function generateAttendancePDF(eventName: string, attendees: Attendee[], 
   doc.setFont('Helvetica', 'bold');
   doc.setFontSize(12);
   doc.setTextColor(darkColor[0], darkColor[1], darkColor[2]);
-  doc.text(eventName, 42, 32);
+  doc.text(eventName, 48, 32);
 
   doc.setFont('Helvetica', 'normal');
   doc.setFontSize(10);
@@ -44,61 +58,166 @@ export function generateAttendancePDF(eventName: string, attendees: Attendee[], 
   doc.setFont('Helvetica', 'bold');
   doc.setFontSize(11);
   doc.setTextColor(darkColor[0], darkColor[1], darkColor[2]);
-  doc.text(new Date(eventDate).toLocaleString(), 42, 39);
+  doc.text(new Date(eventDate).toLocaleString(), 48, 39);
+
+  let currentY = 46;
+
+  if (creatorName) {
+    doc.setFont('Helvetica', 'normal');
+    doc.setFontSize(10);
+    doc.setTextColor(grayColor[0], grayColor[1], grayColor[2]);
+    doc.text('Host/Instructor:', 14, currentY);
+    
+    doc.setFont('Helvetica', 'bold');
+    doc.setFontSize(11);
+    doc.setTextColor(darkColor[0], darkColor[1], darkColor[2]);
+    doc.text(creatorName, 48, currentY);
+    currentY += 7;
+  }
 
   doc.setFont('Helvetica', 'normal');
   doc.setFontSize(10);
   doc.setTextColor(grayColor[0], grayColor[1], grayColor[2]);
-  doc.text('Total Joined:', 14, 46);
+  doc.text('Total Joined:', 14, currentY);
   
   doc.setFont('Helvetica', 'bold');
   doc.setFontSize(11);
   doc.setTextColor(darkColor[0], darkColor[1], darkColor[2]);
-  doc.text(`${attendees.length} attendee${attendees.length === 1 ? '' : 's'}`, 42, 46);
+  doc.text(`${attendees.length} attendee${attendees.length === 1 ? '' : 's'}`, 48, currentY);
+  currentY += 7;
+
+  if (requireGeolocation) {
+    doc.setFont('Helvetica', 'normal');
+    doc.setFontSize(10);
+    doc.setTextColor(grayColor[0], grayColor[1], grayColor[2]);
+    doc.text('Anchor Location:', 14, currentY);
+    
+    doc.setFont('Helvetica', 'bold');
+    doc.setFontSize(10);
+    doc.setTextColor(darkColor[0], darkColor[1], darkColor[2]);
+    const anchorStr = creatorLatitude !== null && creatorLatitude !== undefined && creatorLongitude !== null && creatorLongitude !== undefined
+      ? `${creatorLatitude.toFixed(6)}, ${creatorLongitude.toFixed(6)}`
+      : 'No reference coordinates recorded';
+    doc.text(anchorStr, 48, currentY);
+    currentY += 7;
+  }
 
   // 3. Table of Attendees
   const sortedAttendees = [...attendees].sort((a, b) => 
     new Date(a.joinedAt).getTime() - new Date(b.joinedAt).getTime()
   );
 
-  const tableBody = sortedAttendees.map((att, index) => {
-    const joinDate = new Date(att.joinedAt);
-    const locString = att.latitude && att.longitude 
-      ? `${att.latitude.toFixed(5)}, ${att.longitude.toFixed(5)}` 
-      : 'Not shared';
-    return [
-      String(index + 1),
-      att.name,
-      att.gender || 'Not specified',
-      locString,
-      joinDate.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }),
-      joinDate.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' })
-    ];
+  // Pre-calculate device counts for duplicates in PDF
+  const deviceCounts: { [key: string]: number } = {};
+  sortedAttendees.forEach(att => {
+    if (att.deviceId) {
+      deviceCounts[att.deviceId] = (deviceCounts[att.deviceId] || 0) + 1;
+    }
   });
 
+  // Dynamic Column Setup
+  const headers = ['#', 'Name'];
+  if (requireGender) {
+    headers.push('Gender');
+  }
+  if (requireMatricNumber) {
+    headers.push('Matric Number');
+  }
+  if (customQuestion) {
+    headers.push(`Answer 1 (${customQuestion})`);
+  }
+  if (customQuestion2) {
+    headers.push(`Answer 2 (${customQuestion2})`);
+  }
+  if (customQuestion3) {
+    headers.push(`Answer 3 (${customQuestion3})`);
+  }
+  if (requireGeolocation) {
+    headers.push('Location Token');
+    headers.push('Proximity (mm)');
+    headers.push('Status Judgment');
+  }
+  headers.push('Join Time');
+  headers.push('Join Date');
+
+  const tableBody = sortedAttendees.map((att, index) => {
+    const joinDate = new Date(att.joinedAt);
+    
+    // Flag same-device entries directly in the name column for auditing
+    let displayName = att.name;
+    if (att.deviceId && deviceCounts[att.deviceId] > 1) {
+      displayName += ' (Shared Device)';
+    }
+
+    const row = [String(index + 1), displayName];
+
+    if (requireGender) {
+      row.push(att.gender || 'Not specified');
+    }
+    if (requireMatricNumber) {
+      row.push(att.matricNumber || 'N/A');
+    }
+    if (customQuestion) {
+      row.push(att.customResponse || 'N/A');
+    }
+    if (customQuestion2) {
+      row.push(att.customResponse2 || 'N/A');
+    }
+    if (customQuestion3) {
+      row.push(att.customResponse3 || 'N/A');
+    }
+    if (requireGeolocation) {
+      const locString = att.latitude && att.longitude 
+        ? `${att.latitude.toFixed(5)}, ${att.longitude.toFixed(5)}` 
+        : 'No GPS data';
+
+      const distMm = calculateDistanceInMillimeters(
+        creatorLatitude,
+        creatorLongitude,
+        att.latitude,
+        att.longitude
+      );
+
+      const proximityString = distMm !== null ? formatProximity(distMm) : 'N/A';
+      const status = getProximityStatus(distMm);
+      const judgmentString = distMm !== null ? status.label : 'N/A';
+
+      row.push(locString, proximityString, judgmentString);
+    }
+
+    row.push(
+      joinDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+      joinDate.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
+    );
+
+    return row;
+  });
+
+  const colStyles: { [key: number]: any } = {
+    0: { cellWidth: 8, halign: 'center' },
+  };
+  
+  // Style Join Time (second to last column)
+  colStyles[headers.length - 2] = { cellWidth: 22, halign: 'center' };
+  // Style Join Date (last column)
+  colStyles[headers.length - 1] = { cellWidth: 24, halign: 'center' };
+
   autoTable(doc, {
-    startY: 54,
-    head: [['#', 'Name', 'Gender', 'Location', 'Join Date', 'Join Time']],
+    startY: currentY + 4,
+    head: [headers],
     body: tableBody,
     theme: 'striped',
     headStyles: {
       fillColor: primaryColor,
       textColor: [255, 255, 255],
       fontStyle: 'bold',
-      fontSize: 10,
+      fontSize: 8.5,
     },
     bodyStyles: {
-      fontSize: 9.5,
+      fontSize: 8.5,
       textColor: darkColor,
     },
-    columnStyles: {
-      0: { cellWidth: 10, halign: 'center' },
-      1: { cellWidth: 50 },
-      2: { cellWidth: 25, halign: 'center' },
-      3: { cellWidth: 35, halign: 'center' },
-      4: { cellWidth: 30, halign: 'center' },
-      5: { cellWidth: 30, halign: 'center' },
-    },
+    columnStyles: colStyles,
     didDrawPage: (data) => {
       // Footer: Page Numbering
       const pageCount = doc.getNumberOfPages();
@@ -121,4 +240,5 @@ export function generateAttendancePDF(eventName: string, attendees: Attendee[], 
   // Save the document
   const sanitizedName = eventName.replace(/[^a-z0-9]/gi, '_').toLowerCase();
   doc.save(`attendance_${sanitizedName}.pdf`);
+  return doc;
 }

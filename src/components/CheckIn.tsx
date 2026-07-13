@@ -11,8 +11,12 @@ interface CheckInProps {
 
 interface SavedCheckIn {
   name: string;
-  gender?: string;
+  gender?: string | null;
   joinedAt: string;
+  matricNumber?: string | null;
+  customResponse?: string | null;
+  customResponse2?: string | null;
+  customResponse3?: string | null;
 }
 
 export default function CheckIn({ eventId, onNavigateHome }: CheckInProps) {
@@ -22,7 +26,29 @@ export default function CheckIn({ eventId, onNavigateHome }: CheckInProps) {
   const [error, setError] = useState('');
   const [name, setName] = useState('');
   const [gender, setGender] = useState('');
+  const [matricNumber, setMatricNumber] = useState('');
+  const [customResponse, setCustomResponse] = useState('');
+  const [customResponse2, setCustomResponse2] = useState('');
+  const [customResponse3, setCustomResponse3] = useState('');
   const [savedCheckIn, setSavedCheckIn] = useState<SavedCheckIn | null>(null);
+
+  const [eventConfig, setEventConfig] = useState<{
+    requireGender: boolean;
+    requireMatricNumber: boolean;
+    requireGeolocation: boolean;
+    customQuestion: string | null;
+    customQuestion2: string | null;
+    customQuestion3: string | null;
+    eventType?: string | null;
+  }>({
+    requireGender: true,
+    requireMatricNumber: false,
+    requireGeolocation: true,
+    customQuestion: null,
+    customQuestion2: null,
+    customQuestion3: null,
+    eventType: null
+  });
 
   // Load event details and check local storage & Firestore for existing check-in
   useEffect(() => {
@@ -47,18 +73,33 @@ export default function CheckIn({ eventId, onNavigateHome }: CheckInProps) {
         const user = await getOrCreateUser();
         const eventDoc = await getDoc(doc(db, 'events', eventId));
         if (eventDoc.exists()) {
-          setEventName(eventDoc.data().name);
+          const data = eventDoc.data();
+          setEventName(data.name);
+          const config = {
+            requireGender: data.requireGender !== undefined ? data.requireGender : true,
+            requireMatricNumber: data.requireMatricNumber !== undefined ? data.requireMatricNumber : false,
+            requireGeolocation: data.requireGeolocation !== undefined ? data.requireGeolocation : true,
+            customQuestion: data.customQuestion !== undefined ? data.customQuestion : null,
+            customQuestion2: data.customQuestion2 !== undefined ? data.customQuestion2 : null,
+            customQuestion3: data.customQuestion3 !== undefined ? data.customQuestion3 : null,
+            eventType: data.eventType !== undefined ? data.eventType : null
+          };
+          setEventConfig(config);
 
           // If not found in localStorage, double check Firestore using unique browser UID
           if (!hasCheckedInLocally) {
             const attendeeDoc = await getDoc(doc(db, 'events', eventId, 'attendees', 'att_' + user.uid));
             if (attendeeDoc.exists()) {
-              const data = attendeeDoc.data();
-              const joinedAtDate = data.joinedAt?.toDate ? data.joinedAt.toDate() : new Date();
+              const attData = attendeeDoc.data();
+              const joinedAtDate = attData.joinedAt?.toDate ? attData.joinedAt.toDate() : new Date();
               const restoredCheckIn: SavedCheckIn = {
-                name: data.name,
-                gender: data.gender,
-                joinedAt: joinedAtDate.toISOString()
+                name: attData.name,
+                gender: attData.gender,
+                joinedAt: joinedAtDate.toISOString(),
+                matricNumber: attData.matricNumber,
+                customResponse: attData.customResponse,
+                customResponse2: attData.customResponse2,
+                customResponse3: attData.customResponse3
               };
 
               setSavedCheckIn(restoredCheckIn);
@@ -88,8 +129,24 @@ export default function CheckIn({ eventId, onNavigateHome }: CheckInProps) {
       setError('Please enter your full name.');
       return;
     }
-    if (!gender) {
+    if (eventConfig.requireGender && !gender) {
       setError('Please select your gender.');
+      return;
+    }
+    if (eventConfig.requireMatricNumber && !matricNumber.trim()) {
+      setError('Please enter your matriculation number.');
+      return;
+    }
+    if (eventConfig.customQuestion && !customResponse.trim()) {
+      setError(`Please answer: "${eventConfig.customQuestion}"`);
+      return;
+    }
+    if (eventConfig.customQuestion2 && !customResponse2.trim()) {
+      setError(`Please answer: "${eventConfig.customQuestion2}"`);
+      return;
+    }
+    if (eventConfig.customQuestion3 && !customResponse3.trim()) {
+      setError(`Please answer: "${eventConfig.customQuestion3}"`);
       return;
     }
 
@@ -110,34 +167,43 @@ export default function CheckIn({ eventId, onNavigateHome }: CheckInProps) {
         return;
       }
 
-      // 3. Retrieve geographic coordinates of registration
+      // 3. Retrieve geographic coordinates of registration if enabled
       let latitude: number | null = null;
       let longitude: number | null = null;
 
-      try {
-        const coords = await new Promise<{ latitude: number | null; longitude: number | null }>((resolve) => {
-          if (!navigator.geolocation) {
-            resolve({ latitude: null, longitude: null });
-            return;
-          }
-          navigator.geolocation.getCurrentPosition(
-            (position) => {
-              resolve({
-                latitude: position.coords.latitude,
-                longitude: position.coords.longitude
-              });
-            },
-            (error) => {
-              console.warn("Geolocation failed or denied by user", error);
+      if (eventConfig.requireGeolocation) {
+        try {
+          const coords = await new Promise<{ latitude: number | null; longitude: number | null }>((resolve) => {
+            if (!navigator.geolocation) {
               resolve({ latitude: null, longitude: null });
-            },
-            { enableHighAccuracy: true, timeout: 5500, maximumAge: 0 }
-          );
-        });
-        latitude = coords.latitude;
-        longitude = coords.longitude;
-      } catch (geoErr) {
-        console.error("Error retrieving coordinates:", geoErr);
+              return;
+            }
+            navigator.geolocation.getCurrentPosition(
+              (position) => {
+                resolve({
+                  latitude: position.coords.latitude,
+                  longitude: position.coords.longitude
+                });
+              },
+              (error) => {
+                console.warn("Geolocation failed or denied by user", error);
+                resolve({ latitude: null, longitude: null });
+              },
+              { enableHighAccuracy: true, timeout: 5500, maximumAge: 0 }
+            );
+          });
+          latitude = coords.latitude;
+          longitude = coords.longitude;
+        } catch (geoErr) {
+          console.error("Error retrieving coordinates:", geoErr);
+        }
+      }
+
+      // Retrieve or generate persistent browser device identifier
+      let deviceId = localStorage.getItem('attendance_tracker_device_id');
+      if (!deviceId) {
+        deviceId = 'dev_' + Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+        localStorage.setItem('attendance_tracker_device_id', deviceId);
       }
 
       const currentTimeString = new Date().toISOString();
@@ -146,11 +212,16 @@ export default function CheckIn({ eventId, onNavigateHome }: CheckInProps) {
       try {
         await setDoc(attendeeRef, {
           name: name.trim(),
-          gender: gender,
+          gender: eventConfig.requireGender ? gender : null,
           joinedAt: serverTimestamp(),
           userAgent: navigator.userAgent,
           latitude: latitude,
-          longitude: longitude
+          longitude: longitude,
+          matricNumber: eventConfig.requireMatricNumber ? matricNumber.trim() : null,
+          customResponse: eventConfig.customQuestion ? customResponse.trim() : null,
+          customResponse2: eventConfig.customQuestion2 ? customResponse2.trim() : null,
+          customResponse3: eventConfig.customQuestion3 ? customResponse3.trim() : null,
+          deviceId: deviceId
         });
       } catch (err: any) {
         handleFirestoreError(err, OperationType.CREATE, `events/${eventId}/attendees/${attendeeId}`);
@@ -159,8 +230,12 @@ export default function CheckIn({ eventId, onNavigateHome }: CheckInProps) {
       // 5. Save to local storage to block duplicate entries and remember check-in
       const localCheckinData: SavedCheckIn = {
         name: name.trim(),
-        gender: gender,
-        joinedAt: currentTimeString
+        gender: eventConfig.requireGender ? gender : null,
+        joinedAt: currentTimeString,
+        matricNumber: eventConfig.requireMatricNumber ? matricNumber.trim() : null,
+        customResponse: eventConfig.customQuestion ? customResponse.trim() : null,
+        customResponse2: eventConfig.customQuestion2 ? customResponse2.trim() : null,
+        customResponse3: eventConfig.customQuestion3 ? customResponse3.trim() : null
       };
 
       const localCheckinsStr = localStorage.getItem('attendance_tracker_checkins') || '{}';
@@ -252,18 +327,46 @@ export default function CheckIn({ eventId, onNavigateHome }: CheckInProps) {
                 <p className="text-base font-bold text-gray-900 mt-0.5">{eventName}</p>
               </div>
               <div className="flex items-center justify-between pt-2.5 border-t border-gray-100/80">
-                <div className="flex flex-col space-y-0.5 text-left">
+                <div className="flex flex-col space-y-1.5 text-left">
                   <div className="flex items-center space-x-2">
                     <User className="w-4 h-4 text-indigo-500" />
-                    <span className="text-sm font-medium text-gray-700 truncate max-w-[150px]">{savedCheckIn.name}</span>
+                    <span className="text-sm font-bold text-gray-700 truncate max-w-[150px]">{savedCheckIn.name}</span>
                   </div>
                   {savedCheckIn.gender && (
-                    <span className="text-xs text-gray-400 font-medium pl-6">
-                      Gender: {savedCheckIn.gender}
-                    </span>
+                    <p className="text-xs text-gray-500 pl-6 font-medium">
+                      <span className="text-gray-400 font-semibold uppercase text-[10px]">Gender:</span> {savedCheckIn.gender}
+                    </p>
+                  )}
+                  {savedCheckIn.matricNumber && (
+                    <p className="text-xs text-gray-500 pl-6 font-medium">
+                      <span className="text-gray-400 font-semibold uppercase text-[10px]">
+                        {eventConfig.eventType === 'school' 
+                          ? 'Student ID:' 
+                          : eventConfig.eventType === 'class' 
+                          ? 'Matric No:' 
+                          : eventConfig.eventType === 'meeting' 
+                          ? 'Employee ID:' 
+                          : 'ID Number:'}
+                      </span> {savedCheckIn.matricNumber}
+                    </p>
+                  )}
+                  {savedCheckIn.customResponse && (
+                    <p className="text-xs text-gray-500 pl-6 font-medium">
+                      <span className="text-gray-400 font-semibold uppercase text-[10px]">Answer 1:</span> {savedCheckIn.customResponse}
+                    </p>
+                  )}
+                  {savedCheckIn.customResponse2 && (
+                    <p className="text-xs text-gray-500 pl-6 font-medium">
+                      <span className="text-gray-400 font-semibold uppercase text-[10px]">Answer 2:</span> {savedCheckIn.customResponse2}
+                    </p>
+                  )}
+                  {savedCheckIn.customResponse3 && (
+                    <p className="text-xs text-gray-500 pl-6 font-medium">
+                      <span className="text-gray-400 font-semibold uppercase text-[10px]">Answer 3:</span> {savedCheckIn.customResponse3}
+                    </p>
                   )}
                 </div>
-                <div className="flex items-center space-x-1.5 text-xs text-gray-400">
+                <div className="flex items-center space-x-1.5 text-xs text-gray-450 shrink-0">
                   <Clock className="w-3.5 h-3.5" />
                   <span>{new Date(savedCheckIn.joinedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
                 </div>
@@ -333,26 +436,116 @@ export default function CheckIn({ eventId, onNavigateHome }: CheckInProps) {
                 />
               </div>
 
-              <div>
-                <label htmlFor="attendee-gender-select" className="block text-sm font-medium text-gray-700 mb-1.5">
-                  Gender
-                </label>
-                <select
-                  id="attendee-gender-select"
-                  value={gender}
-                  onChange={(e) => setGender(e.target.value)}
-                  className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-colors text-gray-900 bg-gray-50/50 cursor-pointer"
-                  disabled={checkingIn}
-                  required
-                >
-                  <option value="" disabled>Select your gender</option>
-                  <option value="Male">Male</option>
-                  <option value="Female">Female</option>
-                  <option value="Non-Binary">Non-Binary</option>
-                  <option value="Other">Other</option>
-                  <option value="Prefer not to say">Prefer not to say</option>
-                </select>
-              </div>
+              {eventConfig.requireGender && (
+                <div>
+                  <label htmlFor="attendee-gender-select" className="block text-sm font-medium text-gray-700 mb-1.5">
+                    Gender
+                  </label>
+                  <select
+                    id="attendee-gender-select"
+                    value={gender}
+                    onChange={(e) => setGender(e.target.value)}
+                    className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-colors text-gray-900 bg-gray-50/50 cursor-pointer"
+                    disabled={checkingIn}
+                    required
+                  >
+                    <option value="" disabled>Select your gender</option>
+                    <option value="Male">Male</option>
+                    <option value="Female">Female</option>
+                    <option value="Non-Binary">Non-Binary</option>
+                    <option value="Other">Other</option>
+                    <option value="Prefer not to say">Prefer not to say</option>
+                  </select>
+                </div>
+              )}
+
+              {eventConfig.requireMatricNumber && (
+                <div>
+                  <label htmlFor="attendee-matric-input" className="block text-sm font-medium text-gray-700 mb-1.5">
+                    {eventConfig.eventType === 'school' 
+                      ? 'Student ID Number' 
+                      : eventConfig.eventType === 'class' 
+                      ? 'Class Matriculation / Student ID' 
+                      : eventConfig.eventType === 'meeting' 
+                      ? 'Employee ID / Participant Code' 
+                      : 'Matriculation / ID Number'}
+                  </label>
+                  <input
+                    type="text"
+                    id="attendee-matric-input"
+                    value={matricNumber}
+                    onChange={(e) => setMatricNumber(e.target.value)}
+                    placeholder={eventConfig.eventType === 'school' 
+                      ? 'e.g., SCH-2026-4412' 
+                      : eventConfig.eventType === 'class' 
+                      ? 'e.g., MAT-2026-8941' 
+                      : eventConfig.eventType === 'meeting' 
+                      ? 'e.g., EMP-402' 
+                      : 'e.g., ID-2026-5501'}
+                    maxLength={50}
+                    className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-colors text-gray-900 bg-gray-50/50"
+                    disabled={checkingIn}
+                    required
+                  />
+                </div>
+              )}
+
+              {eventConfig.customQuestion && (
+                <div>
+                  <label htmlFor="attendee-custom-input" className="block text-sm font-medium text-gray-700 mb-1.5">
+                    {eventConfig.customQuestion}
+                  </label>
+                  <input
+                    type="text"
+                    id="attendee-custom-input"
+                    value={customResponse}
+                    onChange={(e) => setCustomResponse(e.target.value)}
+                    placeholder="Type your response here..."
+                    maxLength={150}
+                    className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-colors text-gray-900 bg-gray-50/50"
+                    disabled={checkingIn}
+                    required
+                  />
+                </div>
+              )}
+
+              {eventConfig.customQuestion2 && (
+                <div>
+                  <label htmlFor="attendee-custom-input-2" className="block text-sm font-medium text-gray-700 mb-1.5">
+                    {eventConfig.customQuestion2}
+                  </label>
+                  <input
+                    type="text"
+                    id="attendee-custom-input-2"
+                    value={customResponse2}
+                    onChange={(e) => setCustomResponse2(e.target.value)}
+                    placeholder="Type your response here..."
+                    maxLength={150}
+                    className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-colors text-gray-900 bg-gray-50/50"
+                    disabled={checkingIn}
+                    required
+                  />
+                </div>
+              )}
+
+              {eventConfig.customQuestion3 && (
+                <div>
+                  <label htmlFor="attendee-custom-input-3" className="block text-sm font-medium text-gray-700 mb-1.5">
+                    {eventConfig.customQuestion3}
+                  </label>
+                  <input
+                    type="text"
+                    id="attendee-custom-input-3"
+                    value={customResponse3}
+                    onChange={(e) => setCustomResponse3(e.target.value)}
+                    placeholder="Type your response here..."
+                    maxLength={150}
+                    className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-colors text-gray-900 bg-gray-50/50"
+                    disabled={checkingIn}
+                    required
+                  />
+                </div>
+              )}
 
               {error && (
                 <div className="p-3 bg-red-50 text-red-600 text-sm rounded-xl font-medium" id="checkin-error">
@@ -360,12 +553,14 @@ export default function CheckIn({ eventId, onNavigateHome }: CheckInProps) {
                 </div>
               )}
 
-              <div className="flex items-start space-x-2 bg-gray-50/50 p-3 rounded-xl border border-gray-100/50 text-xs text-gray-500">
-                <MapPin className="w-4 h-4 text-indigo-500 shrink-0 mt-0.5" />
-                <span className="leading-relaxed">
-                  Your geographic coordinates will be requested and recorded to validate the attendance location.
-                </span>
-              </div>
+              {eventConfig.requireGeolocation && (
+                <div className="flex items-start space-x-2 bg-gray-50/50 p-3 rounded-xl border border-gray-100/50 text-xs text-gray-500">
+                  <MapPin className="w-4 h-4 text-indigo-500 shrink-0 mt-0.5" />
+                  <span className="leading-relaxed">
+                    Your geographic coordinates will be requested and recorded to validate the attendance location.
+                  </span>
+                </div>
+              )}
 
               <button
                 type="submit"
