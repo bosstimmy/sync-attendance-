@@ -1,8 +1,14 @@
-import { getAuth, signInWithPopup, GoogleAuthProvider, User } from 'firebase/auth';
-import { app } from './firebase';
+import {
+  signInWithPopup,
+  linkWithPopup,
+  reauthenticateWithPopup,
+  GoogleAuthProvider,
+  User,
+  UserCredential,
+} from 'firebase/auth';
+import { auth, ensureAuth } from './firebase';
 import { Attendee } from '../types';
 
-const auth = getAuth(app);
 const provider = new GoogleAuthProvider();
 
 // Add Gmail sending and userinfo scopes
@@ -13,10 +19,44 @@ provider.addScope('https://www.googleapis.com/auth/userinfo.profile');
 let cachedAccessToken: string | null = null;
 let cachedUser: User | null = null;
 
-// Handle sign-in to retrieve OAuth Access Token
+// Escapes untrusted values before interpolating them into the email HTML body,
+// preventing HTML/script injection from attendee- or organizer-supplied text.
+function escapeHtml(value: unknown): string {
+  return String(value ?? '').replace(/[&<>"']/g, (c) => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] as string
+  ));
+}
+
+// Strips CR/LF so user-controlled values can't inject extra MIME/SMTP headers.
+function headerSafe(value: unknown): string {
+  return String(value ?? '').replace(/[\r\n]+/g, ' ').trim();
+}
+
+// Signs in with Google to retrieve an OAuth access token for the Gmail API.
+// Links (or re-authenticates) against the existing anonymous user so the owner
+// uid stays stable — replacing it would break Firestore ownership.
 export async function googleSignInForGmail(): Promise<{ user: User; accessToken: string }> {
   try {
-    const result = await signInWithPopup(auth, provider);
+    await ensureAuth();
+    const current = auth.currentUser;
+    let result: UserCredential;
+    try {
+      result = current ? await linkWithPopup(current, provider) : await signInWithPopup(auth, provider);
+    } catch (err: any) {
+      // Google already linked to this anonymous account: reauthenticate to mint
+      // a fresh access token while keeping the same uid.
+      if (
+        current &&
+        (err?.code === 'auth/provider-already-linked' ||
+          err?.code === 'auth/credential-already-in-use' ||
+          err?.code === 'auth/email-already-in-use')
+      ) {
+        result = await reauthenticateWithPopup(current, provider);
+      } else {
+        throw err;
+      }
+    }
+
     const credential = GoogleAuthProvider.credentialFromResult(result);
     if (!credential?.accessToken) {
       throw new Error('No access token returned from Google authentication.');
@@ -39,9 +79,17 @@ export function gmailSignOut() {
   cachedUser = null;
 }
 
+// UTF-8 safe base64 encoding (replaces the deprecated unescape() approach).
+function utf8ToBase64(str: string): string {
+  const bytes = new TextEncoder().encode(str);
+  let binary = '';
+  bytes.forEach((b) => { binary += String.fromCharCode(b); });
+  return btoa(binary);
+}
+
 // Encodes raw string safely for Gmail's rfc822 base64url requirement
 function base64UrlSafe(str: string): string {
-  return btoa(unescape(encodeURIComponent(str)))
+  return utf8ToBase64(str)
     .replace(/\+/g, '-')
     .replace(/\//g, '_')
     .replace(/=+$/, '');
@@ -98,7 +146,7 @@ export async function sendAttendanceEmail({
         <table style="width: 100%; border-collapse: collapse; font-size: 13px; line-height: 1.5;">
           <tr>
             <td style="color: #6b7280; padding: 4px 0; width: 120px; vertical-align: top;">Event Name:</td>
-            <td style="color: #111827; font-weight: 600; padding: 4px 0; vertical-align: top;">${eventName}</td>
+            <td style="color: #111827; font-weight: 600; padding: 4px 0; vertical-align: top;">${escapeHtml(eventName)}</td>
           </tr>
           <tr>
             <td style="color: #6b7280; padding: 4px 0; vertical-align: top;">Created On:</td>
@@ -107,7 +155,7 @@ export async function sendAttendanceEmail({
           ${creatorName ? `
           <tr>
             <td style="color: #6b7280; padding: 4px 0; vertical-align: top;">Host/Instructor:</td>
-            <td style="color: #111827; padding: 4px 0; vertical-align: top;">${creatorName}</td>
+            <td style="color: #111827; padding: 4px 0; vertical-align: top;">${escapeHtml(creatorName)}</td>
           </tr>` : ''}
           <tr>
             <td style="color: #6b7280; padding: 4px 0; vertical-align: top;">Total Sign-ins:</td>
@@ -133,7 +181,7 @@ export async function sendAttendanceEmail({
               <tr style="border-bottom: 1px solid #f3f4f6;">
                 <td style="padding: 10px 8px; color: #9ca3af;">${idx + 1}</td>
                 <td style="padding: 10px 8px; font-weight: 500; color: #111827;">
-                  ${att.name}
+                  ${escapeHtml(att.name)}
                   ${isDuplicate ? `
                     <span style="display: inline-block; color: #dc2626; font-size: 10px; background-color: #fef2f2; border: 1px solid #fee2e2; padding: 1px 4px; border-radius: 4px; font-weight: 500; margin-left: 4px;">
                       Shared Phone
@@ -159,8 +207,8 @@ export async function sendAttendanceEmail({
 
   // Construct raw MIME content with base64 encoded parts
   const mimeParts = [
-    `To: ${recipientEmail}`,
-    `Subject: Attendance Report - ${eventName}`,
+    `To: ${headerSafe(recipientEmail)}`,
+    `Subject: ${headerSafe(`Attendance Report - ${eventName}`)}`,
     `MIME-Version: 1.0`,
     `Content-Type: multipart/mixed; boundary="${boundary}"`,
     ``,
@@ -168,7 +216,7 @@ export async function sendAttendanceEmail({
     `Content-Type: text/html; charset="UTF-8"`,
     `Content-Transfer-Encoding: base64`,
     ``,
-    btoa(unescape(encodeURIComponent(htmlBody))),
+    utf8ToBase64(htmlBody),
     ``,
     `--${boundary}`,
     `Content-Type: application/pdf; name="${attachmentFileName}"`,

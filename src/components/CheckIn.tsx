@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { db, handleFirestoreError, OperationType, getOrCreateUser } from '../lib/firebase';
+import { db, handleFirestoreError, OperationType, getOrCreateUser, secureId } from '../lib/firebase';
 import { doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
 import { CheckCircle2, User, Clock, AlertTriangle, ArrowLeft, MapPin } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import Spinner from './Spinner';
 
 interface CheckInProps {
   eventId: string;
@@ -202,7 +203,7 @@ export default function CheckIn({ eventId, onNavigateHome }: CheckInProps) {
       // Retrieve or generate persistent browser device identifier
       let deviceId = localStorage.getItem('attendance_tracker_device_id');
       if (!deviceId) {
-        deviceId = 'dev_' + Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+        deviceId = secureId('dev_', 24);
         localStorage.setItem('attendance_tracker_device_id', deviceId);
       }
 
@@ -246,18 +247,7 @@ export default function CheckIn({ eventId, onNavigateHome }: CheckInProps) {
       setSavedCheckIn(localCheckinData);
     } catch (err: any) {
       console.error("Error signing check-in", err);
-      let displayError = 'Check-in failed. Please check your internet connection.';
-      try {
-        const parsed = JSON.parse(err.message);
-        if (parsed && parsed.error) {
-          displayError = `Check-in failed: ${parsed.error}`;
-        }
-      } catch (e) {
-        if (err.message) {
-          displayError = `Check-in failed: ${err.message}`;
-        }
-      }
-      setError(displayError);
+      setError(err?.message ? `Check-in failed: ${err.message}` : 'Check-in failed. Please check your internet connection.');
     } finally {
       setCheckingIn(false);
     }
@@ -570,10 +560,7 @@ export default function CheckIn({ eventId, onNavigateHome }: CheckInProps) {
               >
                 {checkingIn ? (
                   <span className="inline-flex items-center">
-                    <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" fill="none" viewBox="0 0 24 24">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                    </svg>
+                    <Spinner className="-ml-1 mr-3 h-5 w-5 text-white" />
                     Registering attendance...
                   </span>
                 ) : (

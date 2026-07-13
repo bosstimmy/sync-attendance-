@@ -1,46 +1,45 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // 1. Global Safety Net
+    // 1. Global safety net — everything is denied unless a rule below opens it.
     match /{document=**} {
       allow read, write: if false;
     }
 
-    // Helper functions
+    // ---------- Helper functions ----------
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    // True only for the anonymous user whose uid created the event.
+    function isOwner(eventId) {
+      return isSignedIn()
+        && exists(/databases/$(database)/documents/events/$(eventId))
+        && get(/databases/$(database)/documents/events/$(eventId)).data.creatorUid == request.auth.uid;
+    }
+
     function isValidId(id) {
       return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_-]+$');
     }
 
-    // 2. Event Validation Helper
     function isValidEvent(data) {
       return data.keys().hasAll(['name', 'createdAt', 'creatorUid'])
         && data.name is string
         && data.name.size() > 0
         && data.name.size() <= 100
-        && data.creatorUid is string
-        && data.creatorUid.size() <= 128
-        && (!('creatorLatitude' in data) || data.creatorLatitude is number || data.creatorLatitude == null)
-        && (!('creatorLongitude' in data) || data.creatorLongitude is number || data.creatorLongitude == null)
+        // Ownership is bound to the caller's auth uid at creation time.
+        && data.creatorUid == request.auth.uid
         && (!('requireGender' in data) || data.requireGender is bool)
         && (!('requireMatricNumber' in data) || data.requireMatricNumber is bool)
         && (!('requireGeolocation' in data) || data.requireGeolocation is bool)
         && (!('customQuestion' in data) || data.customQuestion is string || data.customQuestion == null)
         && (!('customQuestion2' in data) || data.customQuestion2 is string || data.customQuestion2 == null)
         && (!('customQuestion3' in data) || data.customQuestion3 is string || data.customQuestion3 == null)
-        && (!('creatorName' in data) || data.creatorName is string || data.creatorName == null);
+        && (!('creatorName' in data) || data.creatorName is string || data.creatorName == null)
+        && (!('eventType' in data) || data.eventType is string || data.eventType == null);
     }
 
-    // 3. Admin Key Validation Helper
-    function isValidAdminKey(data) {
-      return data.keys().hasAll(['eventId', 'adminKey', 'createdAt'])
-        && data.eventId is string
-        && data.eventId.size() <= 128
-        && data.adminKey is string
-        && data.adminKey.size() > 0
-        && data.adminKey.size() <= 128;
-    }
-
-    // 4. Attendee Validation Helper
     function isValidAttendee(data) {
       return data.keys().hasAll(['name', 'joinedAt'])
         && data.name is string
@@ -57,23 +56,48 @@ service cloud.firestore {
         && (!('userAgent' in data) || data.userAgent is string || data.userAgent == null);
     }
 
-    // Matches for Events
+    // ---------- Events ----------
+
     match /events/{eventId} {
+      // Public read is required so attendees can load the check-in form config.
+      // Sensitive organizer geo is NOT stored here — it lives in the owner-only
+      // events/{eventId}/private subcollection below.
       allow get: if isValidId(eventId);
-      allow create: if isValidId(eventId) && isValidEvent(request.resource.data);
-      allow delete: if isValidId(eventId);
 
-      // Match attendees subcollection
-      match /attendees/{attendeeId} {
-        allow create: if isValidId(eventId) && isValidId(attendeeId) && isValidAttendee(request.resource.data);
-        allow get, list, delete: if isValidId(eventId);
+      // Only a signed-in caller may create, and the doc must be stamped with
+      // their own uid (isValidEvent enforces creatorUid == request.auth.uid).
+      allow create: if isSignedIn()
+        && isValidId(eventId)
+        && isValidEvent(request.resource.data);
+
+      // Only the creator may delete the event. No update rule => no overwrites.
+      allow delete: if isValidId(eventId) && isOwner(eventId);
+
+      // Owner-only private data (e.g. the organizer's reference location).
+      match /private/{docId} {
+        allow read: if isOwner(eventId);
+        allow create: if isOwner(eventId)
+          && request.resource.data.creatorUid == request.auth.uid;
       }
-    }
 
-    // Matches for admin_keys
-    match /admin_keys/{eventId} {
-      allow create: if isValidId(eventId) && isValidAdminKey(request.resource.data);
-      allow get: if isValidId(eventId);
+      // ---------- Attendees ----------
+
+      match /attendees/{attendeeId} {
+        // An attendee may only create their own record, keyed to their auth uid.
+        allow create: if isSignedIn()
+          && isValidId(eventId)
+          && attendeeId == 'att_' + request.auth.uid
+          && isValidAttendee(request.resource.data);
+
+        // An attendee may read only their own record (to detect a prior check-in);
+        // the event owner may read every attendee.
+        allow get: if (isSignedIn() && attendeeId == 'att_' + request.auth.uid)
+          || isOwner(eventId);
+
+        // Listing the full registry and deleting entries is owner-only.
+        allow list: if isOwner(eventId);
+        allow delete: if isOwner(eventId);
+      }
     }
   }
 }

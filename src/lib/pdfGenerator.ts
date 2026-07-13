@@ -15,7 +15,8 @@ export function generateAttendancePDF(
   customQuestion: string | null = null,
   customQuestion2: string | null = null,
   customQuestion3: string | null = null,
-  creatorName?: string | null
+  creatorName?: string | null,
+  download: boolean = true
 ) {
   const doc = new jsPDF({
     orientation: 'portrait',
@@ -237,8 +238,11 @@ export function generateAttendancePDF(
     }
   });
 
-  // Save the document
-  const sanitizedName = eventName.replace(/[^a-z0-9]/gi, '_').toLowerCase();
-  doc.save(`attendance_${sanitizedName}.pdf`);
+  // Save the document (skipped when the caller only needs the in-memory doc,
+  // e.g. to attach it to an email).
+  if (download) {
+    const sanitizedName = eventName.replace(/[^a-z0-9]/gi, '_').toLowerCase();
+    doc.save(`attendance_${sanitizedName}.pdf`);
+  }
   return doc;
 }

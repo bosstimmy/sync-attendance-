@@ -1,16 +1,20 @@
 import React, { useState, useEffect } from 'react';
 import { db, getOrCreateUser } from '../lib/firebase';
-import { doc, getDoc, collection, onSnapshot, setDoc, deleteDoc, serverTimestamp, query, orderBy } from 'firebase/firestore';
+import { doc, getDoc, collection, onSnapshot, deleteDoc, query, orderBy, limit } from 'firebase/firestore';
 import { Attendee, Event } from '../types';
 import { generateAttendancePDF } from '../lib/pdfGenerator';
 import { googleSignInForGmail, getCachedGmailUser, gmailSignOut, sendAttendanceEmail } from '../lib/emailService';
 import { calculateDistanceInMillimeters, formatProximity, getProximityStatus } from '../lib/geo';
-import { 
-  ArrowLeft, Download, Share2, Copy, Check, Search, Trash2, 
-  Users, Calendar, Clock, AlertCircle, ShieldAlert, ShieldCheck, ExternalLink, QrCode, MapPin,
+import {
+  ArrowLeft, Download, Copy, Check, Search, Trash2,
+  Users, Calendar, Clock, AlertCircle, ShieldAlert, ExternalLink, QrCode, MapPin,
   Mail, LogOut, BookOpen, GraduationCap, Briefcase, Sparkles
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import Spinner from './Spinner';
+
+// Cap the live attendee subscription to protect memory/rendering on huge events.
+const ATTENDEE_LIMIT = 1000;
 
 interface DashboardProps {
   eventId: string;
@@ -39,9 +43,6 @@ export default function Dashboard({ eventId, adminKey: propAdminKey, onNavigateH
   const [loading, setLoading] = useState(true);
   const [authorizing, setAuthorizing] = useState(true);
   const [authorized, setAuthorized] = useState(false);
-  
-  // Admin Key validation input (in case they don't have it in URL)
-  const [inputAdminKey, setInputAdminKey] = useState('');
   const [authError, setAuthError] = useState('');
   
   // Search state
@@ -78,61 +79,53 @@ export default function Dashboard({ eventId, adminKey: propAdminKey, onNavigateH
   const adminKeyToUse = propAdminKey || localStorage.getItem(`admin_key_${eventId}`) || '';
   const adminLink = `${window.location.origin}${window.location.pathname}?event=${eventId}&adminKey=${adminKeyToUse}`;
 
-  // 1. Authorize user as Admin
+  // 1. Authorize: only the anonymous uid that created this event may enter.
+  //    (Access is device/browser-bound — the shareable "admin link" no longer
+  //    grants access on other devices, by design.)
   useEffect(() => {
+    let cancelled = false;
     async function authorize() {
       setAuthorizing(true);
       setAuthError('');
-      
+
       try {
-        const keyToTry = propAdminKey || localStorage.getItem(`admin_key_${eventId}`);
-        if (keyToTry) {
-          const adminKeyDocRef = doc(db, 'admin_keys', eventId);
-          const adminKeyDocSnap = await getDoc(adminKeyDocRef);
+        const { uid } = await getOrCreateUser();
+        const snap = await getDoc(doc(db, 'events', eventId));
+        if (cancelled) return;
 
-          if (adminKeyDocSnap.exists()) {
-            const actualAdminKey = adminKeyDocSnap.data().adminKey;
-            if (keyToTry === actualAdminKey) {
-              setAuthorized(true);
-              localStorage.setItem(`admin_key_${eventId}`, keyToTry);
-            } else {
-              setAuthError('Supplied admin key is incorrect.');
-            }
-          } else {
-            setAuthError('Event administration credentials not found.');
-          }
-        } else {
-          setAuthError('Admin authentication required.');
+        if (!snap.exists()) {
+          setAuthError('Event not found. It may have been deleted.');
+          return;
         }
-      } catch (err: any) {
-        console.error("Error during authorization", err);
-        setAuthError('Connection failed. Unable to authenticate session.');
-      } finally {
-        setAuthorizing(false);
-      }
-    }
-    authorize();
-  }, [eventId, propAdminKey]);
 
-  // 2. Fetch event info and listen to attendees list in real-time
-  useEffect(() => {
-    if (!authorized) return;
-
-    setLoading(true);
-
-    // Fetch Event public details
-    const eventRef = doc(db, 'events', eventId);
-    getDoc(eventRef).then((snap) => {
-      if (snap.exists()) {
         const data = snap.data();
+        if (data.creatorUid !== uid) {
+          setAuthError('This dashboard can only be opened on the device or browser that created the event.');
+          return;
+        }
+
+        // Owner confirmed — load the owner-only reference location.
+        let creatorLatitude: number | null = null;
+        let creatorLongitude: number | null = null;
+        try {
+          const anchorSnap = await getDoc(doc(db, 'events', eventId, 'private', 'anchor'));
+          if (anchorSnap.exists()) {
+            creatorLatitude = anchorSnap.data().latitude ?? null;
+            creatorLongitude = anchorSnap.data().longitude ?? null;
+          }
+        } catch (anchorErr) {
+          console.error('Error loading reference location', anchorErr);
+        }
+        if (cancelled) return;
+
         setEvent({
           id: eventId,
           name: data.name,
           creatorName: data.creatorName !== undefined ? data.creatorName : null,
           createdAt: data.createdAt?.toDate ? data.createdAt.toDate().toISOString() : new Date().toISOString(),
           creatorUid: data.creatorUid,
-          creatorLatitude: data.creatorLatitude !== undefined ? data.creatorLatitude : null,
-          creatorLongitude: data.creatorLongitude !== undefined ? data.creatorLongitude : null,
+          creatorLatitude,
+          creatorLongitude,
           requireGender: data.requireGender !== undefined ? data.requireGender : true,
           requireMatricNumber: data.requireMatricNumber !== undefined ? data.requireMatricNumber : false,
           requireGeolocation: data.requireGeolocation !== undefined ? data.requireGeolocation : true,
@@ -141,13 +134,28 @@ export default function Dashboard({ eventId, adminKey: propAdminKey, onNavigateH
           customQuestion3: data.customQuestion3 !== undefined ? data.customQuestion3 : null,
           eventType: data.eventType !== undefined ? data.eventType : null
         });
+        setAuthorized(true);
+      } catch (err: any) {
+        console.error("Error during authorization", err);
+        if (!cancelled) setAuthError('Connection failed. Unable to authenticate session.');
+      } finally {
+        if (!cancelled) setAuthorizing(false);
       }
-    }).catch(err => console.error("Error loading event doc", err));
+    }
+    authorize();
+    return () => { cancelled = true; };
+  }, [eventId]);
 
-    // Listen to real-time attendee list
+  // 2. Listen to the attendee registry in real-time (owner-only by rules).
+  useEffect(() => {
+    if (!authorized) return;
+
+    setLoading(true);
+
     const attendeesQuery = query(
       collection(db, 'events', eventId, 'attendees'),
-      orderBy('joinedAt', 'desc')
+      orderBy('joinedAt', 'desc'),
+      limit(ATTENDEE_LIMIT)
     );
 
     const unsubscribe = onSnapshot(attendeesQuery, (snapshot) => {
@@ -178,40 +186,6 @@ export default function Dashboard({ eventId, adminKey: propAdminKey, onNavigateH
 
     return () => unsubscribe();
   }, [eventId, authorized]);
-
-  // Handle manual admin key submission
-  const handleManualAuth = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!inputAdminKey.trim()) {
-      setAuthError('Please enter an admin key.');
-      return;
-    }
-
-    setAuthorizing(true);
-    setAuthError('');
-
-    try {
-      const adminKeyDocRef = doc(db, 'admin_keys', eventId);
-      const adminKeyDocSnap = await getDoc(adminKeyDocRef);
-
-      if (adminKeyDocSnap.exists()) {
-        const actualAdminKey = adminKeyDocSnap.data().adminKey;
-        if (inputAdminKey.trim() === actualAdminKey) {
-          setAuthorized(true);
-          localStorage.setItem(`admin_key_${eventId}`, inputAdminKey.trim());
-        } else {
-          setAuthError('Incorrect Admin Key. Please verify the code and try again.');
-        }
-      } else {
-        setAuthError('Event administration credentials not found.');
-      }
-    } catch (err: any) {
-      console.error("Error verifying manual key", err);
-      setAuthError('Incorrect Admin Key. Please verify the code and try again.');
-    } finally {
-      setAuthorizing(false);
-    }
-  };
 
   const handleCopyAttendeeLink = () => {
     navigator.clipboard.writeText(attendeeLink);
@@ -311,10 +285,10 @@ export default function Dashboard({ eventId, adminKey: propAdminKey, onNavigateH
     setEmailError(null);
 
     try {
-      // 1. Generate the PDF document in-memory
+      // 1. Generate the PDF document in-memory (no browser download).
       const doc = generateAttendancePDF(
-        event.name, 
-        attendees, 
+        event.name,
+        attendees,
         event.createdAt,
         event.creatorLatitude,
         event.creatorLongitude,
@@ -324,7 +298,8 @@ export default function Dashboard({ eventId, adminKey: propAdminKey, onNavigateH
         event.customQuestion,
         event.customQuestion2,
         event.customQuestion3,
-        event.creatorName
+        event.creatorName,
+        false
       );
 
       // Extract raw base64 data from pdf instance
@@ -374,11 +349,24 @@ export default function Dashboard({ eventId, adminKey: propAdminKey, onNavigateH
     (att.customResponse3 && att.customResponse3.toLowerCase().includes(searchQuery.toLowerCase()))
   );
 
-  // Authentication Interface
+  // Verifying ownership
+  if (authorizing) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[60vh] py-12" id="dashboard-authorizing">
+        <div className="relative w-16 h-16 mb-4">
+          <div className="absolute inset-0 border-4 border-indigo-100 rounded-full"></div>
+          <div className="absolute inset-0 border-4 border-t-indigo-600 rounded-full animate-spin"></div>
+        </div>
+        <p className="text-gray-500 font-medium">Verifying dashboard access...</p>
+      </div>
+    );
+  }
+
+  // Not the owner of this event on this device/browser.
   if (!authorized) {
     return (
       <div className="max-w-md mx-auto py-12 px-4" id="dashboard-auth-screen">
-        <motion.div 
+        <motion.div
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
           className="bg-white rounded-3xl p-8 border border-gray-100 fancy-shadow"
@@ -387,44 +375,19 @@ export default function Dashboard({ eventId, adminKey: propAdminKey, onNavigateH
             <div className="inline-flex items-center justify-center p-3 bg-amber-50 text-amber-600 rounded-2xl mb-4">
               <ShieldAlert className="w-8 h-8" />
             </div>
-            <h2 className="text-2xl font-bold font-display text-gray-900">Admin Lock</h2>
+            <h2 className="text-2xl font-bold font-display text-gray-900">Dashboard Locked</h2>
             <p className="text-gray-500 text-sm mt-1">
-              You must supply the secure Admin Key to access this attendance list.
+              {authError || 'You are not authorized to view this attendance list.'}
             </p>
           </div>
 
-          <form onSubmit={handleManualAuth} className="space-y-4">
-            <div>
-              <label htmlFor="admin-key-input" className="block text-sm font-medium text-gray-700 mb-1.5">
-                Admin Key or Secret
-              </label>
-              <input
-                type="text"
-                id="admin-key-input"
-                value={inputAdminKey}
-                onChange={(e) => setInputAdminKey(e.target.value)}
-                placeholder="e.g., adm_xxxxxxxxx"
-                className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-colors text-gray-900 bg-gray-50/50 text-center font-mono"
-                disabled={authorizing}
-              />
-            </div>
+          <div className="p-4 bg-gray-50/70 border border-gray-100 rounded-2xl text-xs text-gray-500 leading-relaxed mb-6">
+            For your attendees' privacy, this dashboard is tied to the browser that
+            created the event. Open it from that same device, or create a new session
+            from this one.
+          </div>
 
-            {authError && (
-              <div className="p-3 bg-red-50 text-red-600 text-sm rounded-xl font-medium text-center">
-                {authError}
-              </div>
-            )}
-
-            <button
-              type="submit"
-              disabled={authorizing}
-              className="w-full py-3 px-4 bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded-xl shadow-sm transition-all focus:outline-none focus:ring-2 focus:ring-indigo-500/50 flex items-center justify-center disabled:opacity-50 cursor-pointer"
-            >
-              {authorizing ? 'Verifying Key...' : 'Unlock Dashboard'}
-            </button>
-          </form>
-
-          <div className="mt-6 pt-5 border-t border-gray-100 text-center">
+          <div className="pt-2 text-center">
             <button
               onClick={onNavigateHome}
               className="text-xs font-semibold text-gray-500 hover:text-gray-700 flex items-center justify-center mx-auto transition-colors cursor-pointer"
@@ -973,10 +936,7 @@ export default function Dashboard({ eventId, adminKey: propAdminKey, onNavigateH
                           title="Delete attendee"
                         >
                           {deletingId === att.id ? (
-                            <svg className="animate-spin h-4 w-4 text-red-600" fill="none" viewBox="0 0 24 24">
-                              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                            </svg>
+                            <Spinner className="h-4 w-4 text-red-600" />
                           ) : (
                             <Trash2 className="w-4 h-4" />
                           )}

@@ -1,11 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { db, getOrCreateUser, handleFirestoreError, OperationType } from '../lib/firebase';
+import { db, getOrCreateUser, handleFirestoreError, OperationType, secureId } from '../lib/firebase';
 import { doc, setDoc, serverTimestamp } from 'firebase/firestore';
-import { 
-  Plus, Calendar, Shield, ExternalLink, Copy, Check, Trash2, ArrowLeft, MapPin,
+import {
+  Plus, Calendar, Shield, ExternalLink, Copy, Check, Trash2, MapPin,
   BookOpen, GraduationCap, Briefcase, Sparkles, Settings
 } from 'lucide-react';
 import { motion } from 'motion/react';
+import Spinner from './Spinner';
 
 interface LocalEvent {
   eventId: string;
@@ -96,12 +97,12 @@ export default function CreateEvent({ onNavigate }: CreateEventProps) {
     setError('');
 
     try {
-      // 1. Sign in or fetch anonymous user details securely
-      const user = (await getOrCreateUser()) as any;
-      
-      // 2. Generate unique alphanumeric IDs
-      const eventId = 'ev_' + Math.random().toString(36).substring(2, 11);
-      const adminKey = 'adm_' + Math.random().toString(36).substring(2, 15);
+      // 1. Establish this browser's anonymous identity (used for ownership).
+      const user = await getOrCreateUser();
+
+      // 2. Generate unpredictable, cryptographically-strong IDs.
+      const eventId = secureId('ev_', 16);
+      const adminKey = secureId('adm_', 20);
 
       // 3. Attempt to capture high-precision coordinator location token if selected
       let creatorLatitude: number | null = null;
@@ -135,7 +136,8 @@ export default function CreateEvent({ onNavigate }: CreateEventProps) {
         }
       }
 
-      // 4. Create Event Document (Public info)
+      // 4. Create the public event document. It holds only non-sensitive config
+      //    that attendees need to render the check-in form — no organizer geo.
       const eventRef = doc(db, 'events', eventId);
       try {
         await setDoc(eventRef, {
@@ -143,8 +145,6 @@ export default function CreateEvent({ onNavigate }: CreateEventProps) {
           creatorName: creatorName.trim() ? creatorName.trim() : null,
           createdAt: serverTimestamp(),
           creatorUid: user.uid,
-          creatorLatitude,
-          creatorLongitude,
           requireGender,
           requireMatricNumber,
           requireGeolocation,
@@ -157,16 +157,18 @@ export default function CreateEvent({ onNavigate }: CreateEventProps) {
         handleFirestoreError(err, OperationType.CREATE, `events/${eventId}`);
       }
 
-      // 4. Create Private Admin Key mapping document
-      const adminKeyRef = doc(db, 'admin_keys', eventId);
+      // 5. Store the organizer's reference location in the owner-only private
+      //    subcollection so it is never exposed to attendees.
+      const anchorRef = doc(db, 'events', eventId, 'private', 'anchor');
       try {
-        await setDoc(adminKeyRef, {
-          eventId,
-          adminKey,
+        await setDoc(anchorRef, {
+          creatorUid: user.uid,
+          latitude: creatorLatitude,
+          longitude: creatorLongitude,
           createdAt: serverTimestamp()
         });
       } catch (err: any) {
-        handleFirestoreError(err, OperationType.CREATE, `admin_keys/${eventId}`);
+        handleFirestoreError(err, OperationType.CREATE, `events/${eventId}/private/anchor`);
       }
 
       // 5. Save event to local storage so organizer can return to it
@@ -469,10 +471,7 @@ export default function CreateEvent({ onNavigate }: CreateEventProps) {
           >
             {loading ? (
               <span className="inline-flex items-center">
-                <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" fill="none" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                </svg>
+                <Spinner className="-ml-1 mr-3 h-5 w-5 text-white" />
                 Deploying Session...
               </span>
             ) : (
