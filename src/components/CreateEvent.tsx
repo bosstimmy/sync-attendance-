@@ -1,12 +1,21 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { db, getOrCreateUser, handleFirestoreError, OperationType, secureId } from '../lib/firebase';
 import { doc, setDoc, serverTimestamp } from 'firebase/firestore';
 import {
-  Plus, Calendar, Shield, ExternalLink, Copy, Check, Trash2, MapPin,
+  Plus, Calendar, Shield, ExternalLink, Copy, Check, Trash2, MapPin, ChevronDown,
   BookOpen, GraduationCap, Briefcase, Sparkles, Settings
 } from 'lucide-react';
 import { motion } from 'motion/react';
 import Spinner from './Spinner';
+
+// Session types offered when creating an event.
+const EVENT_TYPES = [
+  { id: 'class', label: 'Class / Lecture', icon: BookOpen },
+  { id: 'school', label: 'School Activity', icon: GraduationCap },
+  { id: 'meeting', label: 'Meeting / Team', icon: Briefcase },
+  { id: 'event', label: 'Event / Seminar', icon: Sparkles },
+  { id: 'custom', label: 'Custom / Other', icon: Settings },
+];
 
 interface LocalEvent {
   eventId: string;
@@ -37,6 +46,23 @@ export default function CreateEvent({ onNavigate }: CreateEventProps) {
   const [customQuestion2, setCustomQuestion2] = useState('');
   const [customQuestion3, setCustomQuestion3] = useState('');
   const [visibleQuestionsCount, setVisibleQuestionsCount] = useState(1);
+
+  // Session-type dropdown open/close + click-outside handling.
+  const [typeMenuOpen, setTypeMenuOpen] = useState(false);
+  const typeMenuRef = useRef<HTMLDivElement>(null);
+  const selectedType = EVENT_TYPES.find(t => t.id === eventType) ?? EVENT_TYPES[EVENT_TYPES.length - 1];
+  const SelectedIcon = selectedType.icon;
+
+  useEffect(() => {
+    if (!typeMenuOpen) return;
+    const handleOutside = (e: MouseEvent) => {
+      if (typeMenuRef.current && !typeMenuRef.current.contains(e.target as Node)) {
+        setTypeMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleOutside);
+    return () => document.removeEventListener('mousedown', handleOutside);
+  }, [typeMenuOpen]);
 
   const handleEventTypeChange = (type: string) => {
     setEventType(type);
@@ -238,35 +264,58 @@ export default function CreateEvent({ onNavigate }: CreateEventProps) {
 
         <form onSubmit={handleCreate} className="space-y-4">
           {/* Event Type Dropdown Selection */}
-          <div className="mb-6">
+          <div className="mb-6" ref={typeMenuRef}>
             <label className="block text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">
               Select Session Type
             </label>
-            <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5">
-              {[
-                { id: 'class', label: 'Class / Lecture', icon: BookOpen },
-                { id: 'school', label: 'School Activity', icon: GraduationCap },
-                { id: 'meeting', label: 'Meeting / Team', icon: Briefcase },
-                { id: 'event', label: 'Event / Seminar', icon: Sparkles },
-                { id: 'custom', label: 'Custom / Other', icon: Settings },
-              ].map((type) => {
-                const IconComponent = type.icon;
-                return (
-                  <button
-                    key={type.id}
-                    type="button"
-                    onClick={() => handleEventTypeChange(type.id)}
-                    className={`flex flex-col items-center justify-center p-3.5 rounded-2xl border text-center transition-all cursor-pointer ${
-                      eventType === type.id
-                        ? 'border-indigo-600 bg-indigo-50/70 text-indigo-950 font-semibold shadow-sm ring-2 ring-indigo-600/10'
-                        : 'border-gray-200 bg-white hover:bg-gray-50/50 text-gray-600'
-                    }`}
-                  >
-                    <IconComponent className={`w-5 h-5 mb-1.5 ${eventType === type.id ? 'text-indigo-600' : 'text-gray-400'}`} />
-                    <span className="text-[11px] leading-tight font-medium">{type.label}</span>
-                  </button>
-                );
-              })}
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setTypeMenuOpen((o) => !o)}
+                aria-haspopup="listbox"
+                aria-expanded={typeMenuOpen}
+                disabled={loading}
+                className="w-full flex items-center justify-between px-4 py-3 rounded-xl border border-gray-200 bg-white hover:bg-gray-50/50 transition-colors cursor-pointer focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 disabled:opacity-50"
+              >
+                <span className="flex items-center min-w-0">
+                  <SelectedIcon className="w-5 h-5 mr-2.5 text-indigo-600 shrink-0" />
+                  <span className="text-sm font-medium text-gray-900 truncate">{selectedType.label}</span>
+                </span>
+                <ChevronDown className={`w-4 h-4 text-gray-400 shrink-0 ml-2 transition-transform ${typeMenuOpen ? 'rotate-180' : ''}`} />
+              </button>
+
+              {typeMenuOpen && (
+                <div
+                  role="listbox"
+                  className="absolute z-20 mt-2 w-full bg-white border border-gray-100 rounded-xl shadow-lg overflow-hidden py-1"
+                >
+                  {EVENT_TYPES.map((type) => {
+                    const IconComponent = type.icon;
+                    const active = eventType === type.id;
+                    return (
+                      <button
+                        key={type.id}
+                        type="button"
+                        role="option"
+                        aria-selected={active}
+                        onClick={() => {
+                          handleEventTypeChange(type.id);
+                          setTypeMenuOpen(false);
+                        }}
+                        className={`w-full flex items-center px-4 py-2.5 text-left transition-colors cursor-pointer ${
+                          active
+                            ? 'bg-indigo-50/70 text-indigo-950 font-semibold'
+                            : 'text-gray-700 hover:bg-gray-50'
+                        }`}
+                      >
+                        <IconComponent className={`w-4.5 h-4.5 mr-2.5 shrink-0 ${active ? 'text-indigo-600' : 'text-gray-400'}`} />
+                        <span className="text-sm">{type.label}</span>
+                        {active && <Check className="w-4 h-4 ml-auto text-indigo-600 shrink-0" />}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           </div>
 
