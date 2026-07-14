@@ -188,18 +188,7 @@ export default function CreateEvent({ onNavigate }: CreateEventProps) {
       onNavigate(eventId, adminKey);
     } catch (err: any) {
       console.error("Error creating event:", err);
-      let displayError = 'Failed to create event. Please verify your connection.';
-      try {
-        const parsed = JSON.parse(err.message);
-        if (parsed && parsed.error) {
-          displayError = `Failed to create event: ${parsed.error}`;
-        }
-      } catch (e) {
-        if (err.message) {
-          displayError = `Failed to create event: ${err.message}`;
-        }
-      }
-      setError(displayError);
+      setError(err?.message ? `Failed to create event: ${err.message}` : 'Failed to create event. Please verify your connection.');
     } finally {
       setLoading(false);
     }

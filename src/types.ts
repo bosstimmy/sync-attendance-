@@ -29,8 +29,3 @@ export interface Attendee {
   customResponse3?: string | null;
   deviceId?: string | null;
 }
-
-export interface EventAdmin {
-  adminKey: string;
-  assignedAt: string; // ISO string
-}

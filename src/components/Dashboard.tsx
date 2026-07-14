@@ -2,7 +2,6 @@ import React, { useState, useEffect } from 'react';
 import { db, getOrCreateUser } from '../lib/firebase';
 import { doc, getDoc, collection, onSnapshot, deleteDoc, query, orderBy, limit } from 'firebase/firestore';
 import { Attendee, Event } from '../types';
-import { generateAttendancePDF } from '../lib/pdfGenerator';
 import { googleSignInForGmail, getCachedGmailUser, gmailSignOut, sendAttendanceEmail } from '../lib/emailService';
 import { calculateDistanceInMillimeters, formatProximity, getProximityStatus } from '../lib/geo';
 import {
@@ -235,8 +234,9 @@ export default function Dashboard({ eventId, adminKey: propAdminKey, onNavigateH
     }
   };
 
-  const triggerPDFDownload = () => {
+  const triggerPDFDownload = async () => {
     if (!event) return;
+    const { generateAttendancePDF } = await import('../lib/pdfGenerator');
     generateAttendancePDF(
       event.name, 
       attendees, 
@@ -286,6 +286,7 @@ export default function Dashboard({ eventId, adminKey: propAdminKey, onNavigateH
 
     try {
       // 1. Generate the PDF document in-memory (no browser download).
+      const { generateAttendancePDF } = await import('../lib/pdfGenerator');
       const doc = generateAttendancePDF(
         event.name,
         attendees,
@@ -692,7 +693,7 @@ export default function Dashboard({ eventId, adminKey: propAdminKey, onNavigateH
 
         <div className="bg-white rounded-2xl border border-gray-100 p-5 fancy-shadow">
           <p className="text-xs font-semibold text-amber-500 uppercase tracking-wider">Admin Dashboard Link</p>
-          <p className="text-xs text-gray-400 mt-1">Keep this private. Bookmark or copy to open this logs page on other devices.</p>
+          <p className="text-xs text-gray-400 mt-1">Bookmark this to reopen your logs — access is tied to <span className="font-semibold text-gray-500">this browser</span> for attendee privacy.</p>
           <div className="mt-3 flex items-center space-x-2 bg-gray-50 p-2.5 rounded-xl border border-gray-200/50">
             <span className="font-mono text-xs text-gray-600 truncate flex-1">{adminLink}</span>
             <button
