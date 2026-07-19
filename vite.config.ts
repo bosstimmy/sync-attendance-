@@ -11,6 +11,7 @@ export default defineConfig(() => {
         '@': path.resolve(__dirname, '.'),
       },
     },
+    base: '/sync-attendance-/',
     build: {
       rollupOptions: {
         output: {
